@@ -1,0 +1,414 @@
+{
+ "meta": {
+  "stack": "numpy 2.4.4 / scipy-openblas64, python 3.12.3, cores=1",
+  "note": "numpy stands in for torch; identical LAPACK/BLAS kernel class, exponents transfer, constants differ",
+  "operand": "Gaussian W in C^{D^4 x D^4}, chi=D^2, complex128",
+  "rsvd": {
+   "oversample": 8,
+   "power_iters": 1,
+   "eta": 1e-06,
+   "probes": 6
+  },
+  "theory": {
+   "exact_exponent": 12,
+   "sketched_exponent": 10,
+   "gap": 2.0,
+   "ci_gate_T-PERF": "gap >= 1.6"
+  }
+ },
+ "timing": [
+  {
+   "mode": "timing",
+   "backend": "exact",
+   "D": 2,
+   "n": 16,
+   "chi": 4,
+   "times_s": [
+    0.00022332200001073943,
+    0.00021589300000357525,
+    0.00017212099999142083,
+    0.00015412700000183577,
+    0.00014596599999094906,
+    0.00014300399999456204,
+    0.00014044899999987592,
+    0.0001383809999992991,
+    0.00019629700000223238
+   ],
+   "median_s": 0.00015412700000183577,
+   "min_s": 0.0001383809999992991
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 2,
+   "n": 16,
+   "chi": 4,
+   "times_s": [
+    0.0005061399999988225,
+    0.00036772100000348473,
+    0.00041338699999471373,
+    0.00041367600000796756,
+    0.0033531919999916227,
+    0.00048726800000054027,
+    0.0006140520000030847,
+    0.0004012380000091298,
+    0.0005241709999950217
+   ],
+   "median_s": 0.00048726800000054027,
+   "min_s": 0.00036772100000348473,
+   "gate_passed_on_gaussian": false
+  },
+  {
+   "mode": "timing",
+   "backend": "exact",
+   "D": 3,
+   "n": 81,
+   "chi": 9,
+   "times_s": [
+    0.002591296999995052,
+    0.0023697319999911315,
+    0.0024740419999886853,
+    0.002301283000008425,
+    0.002634071000002791,
+    0.0025524969999963787,
+    0.002598960000000261,
+    0.00242783999999574,
+    0.0024451329999948257
+   ],
+   "median_s": 0.0024740419999886853,
+   "min_s": 0.002301283000008425
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 3,
+   "n": 81,
+   "chi": 9,
+   "times_s": [
+    0.001125955000006229,
+    0.0011832109999971863,
+    0.0010250010000021348,
+    0.0009847609999980023,
+    0.0011373259999913898,
+    0.0010044899999996915,
+    0.0009809489999952348,
+    0.0010354799999987563,
+    0.001084919999996714
+   ],
+   "median_s": 0.0010354799999987563,
+   "min_s": 0.0009809489999952348,
+   "gate_passed_on_gaussian": false
+  },
+  {
+   "mode": "timing",
+   "backend": "exact",
+   "D": 4,
+   "n": 256,
+   "chi": 16,
+   "times_s": [
+    0.03969587000000274,
+    0.037101001999999994,
+    0.03668375900001308,
+    0.03730799599999557,
+    0.03680385399999864,
+    0.03700688200000002,
+    0.0363479199999972
+   ],
+   "median_s": 0.03700688200000002,
+   "min_s": 0.0363479199999972
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 4,
+   "n": 256,
+   "chi": 16,
+   "times_s": [
+    0.004250420999994731,
+    0.004172035999999935,
+    0.0040403710000020965,
+    0.004170436999999083,
+    0.0041111929999999575,
+    0.004190535999995859,
+    0.004187678000008077
+   ],
+   "median_s": 0.004172035999999935,
+   "min_s": 0.0040403710000020965,
+   "gate_passed_on_gaussian": false
+  },
+  {
+   "mode": "timing",
+   "backend": "exact",
+   "D": 5,
+   "n": 625,
+   "chi": 25,
+   "times_s": [
+    0.394617678000003,
+    0.3746581340000006,
+    0.4107308810000063,
+    0.374953081000001,
+    0.3719519910000031
+   ],
+   "median_s": 0.374953081000001,
+   "min_s": 0.3719519910000031
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 5,
+   "n": 625,
+   "chi": 25,
+   "times_s": [
+    0.020681480999996893,
+    0.020947371999994857,
+    0.020578844999988632,
+    0.0203515719999956,
+    0.020234893999997894
+   ],
+   "median_s": 0.020578844999988632,
+   "min_s": 0.020234893999997894,
+   "gate_passed_on_gaussian": false
+  },
+  {
+   "mode": "timing",
+   "backend": "exact",
+   "D": 6,
+   "n": 1296,
+   "chi": 36,
+   "times_s": [
+    3.108129319999989,
+    3.0731024530000184,
+    3.01114129299998
+   ],
+   "median_s": 3.0731024530000184,
+   "min_s": 3.01114129299998
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 6,
+   "n": 1296,
+   "chi": 36,
+   "times_s": [
+    0.09201199000000315,
+    0.09343587399999365,
+    0.09073572500000182
+   ],
+   "median_s": 0.09201199000000315,
+   "min_s": 0.09073572500000182,
+   "gate_passed_on_gaussian": false
+  },
+  {
+   "mode": "timing",
+   "backend": "exact",
+   "D": 7,
+   "n": 2401,
+   "chi": 49,
+   "times_s": [
+    24.869808113000005
+   ],
+   "median_s": 24.869808113000005,
+   "min_s": 24.869808113000005
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 7,
+   "n": 2401,
+   "chi": 49,
+   "times_s": [
+    0.39045384199999944
+   ],
+   "median_s": 0.39045384199999944,
+   "min_s": 0.39045384199999944,
+   "gate_passed_on_gaussian": false
+  },
+  {
+   "mode": "timing",
+   "backend": "sketched",
+   "D": 8,
+   "n": 4096,
+   "chi": 64,
+   "times_s": [
+    1.323781294000014,
+    1.2258889400000044,
+    1.232035828000022
+   ],
+   "median_s": 1.232035828000022,
+   "min_s": 1.2258889400000044,
+   "gate_passed_on_gaussian": false
+  }
+ ],
+ "fits": {
+  "exact_largeD": {
+   "slope": 11.567276067099135,
+   "log_intercept": -19.457095537726694,
+   "rms_resid": 0.14394282005159179,
+   "D_range": [
+    4,
+    7
+   ],
+   "n_points": 4
+  },
+  "sketched_largeD": {
+   "slope": 8.270842648234316,
+   "log_intercept": -17.07401961302928,
+   "rms_resid": 0.1067802434690348,
+   "D_range": [
+    4,
+    8
+   ],
+   "n_points": 5
+  },
+  "exact_allD": {
+   "slope": 9.557296099316252,
+   "log_intercept": -16.033065111354144,
+   "rms_resid": 0.4850088997867798,
+   "D_range": [
+    2,
+    7
+   ],
+   "n_points": 6
+  },
+  "sketched_allD": {
+   "slope": 5.854255070849822,
+   "log_intercept": -12.723156218662766,
+   "rms_resid": 0.6831485744148702,
+   "D_range": [
+    2,
+    8
+   ],
+   "n_points": 7
+  }
+ },
+ "exponent_gap_largeD": 3.2964334188648188,
+ "speedup_exact_over_sketched": {
+  "2": 0.31630847911552756,
+  "3": 2.389270676393225,
+  "4": 8.870221158206832,
+  "5": 18.220317078057985,
+  "6": 33.39893478012934,
+  "7": 63.694617488230634
+ },
+ "projected_exact_D8_s": 99.12471851743553,
+ "validation": [
+  {
+   "mode": "validate",
+   "D": 4,
+   "n": 256,
+   "chi": 16,
+   "family": "localized_exp",
+   "posterior_est": 0.00014885409671546316,
+   "gate_passed": false,
+   "eta_sigma1": 1e-06,
+   "exact_disc_weight": 1.1253517471926047e-07,
+   "optimal_rel_err": 0.00033546262790251185,
+   "action": "INV-3 fallback to ExactSVD (production behavior)",
+   "gate": "v1_fixed_eta"
+  },
+  {
+   "mode": "validate",
+   "D": 4,
+   "n": 256,
+   "chi": 16,
+   "family": "slow_powerlaw",
+   "posterior_est": 1.8481977781689325,
+   "gate_passed": false,
+   "eta_sigma1": 1e-06,
+   "exact_disc_weight": 0.03454459398586085,
+   "optimal_rel_err": 0.058823529411764705,
+   "action": "INV-3 fallback to ExactSVD (production behavior)",
+   "gate": "v1_fixed_eta"
+  },
+  {
+   "mode": "validate",
+   "D": 6,
+   "n": 1296,
+   "chi": 36,
+   "family": "localized_exp",
+   "posterior_est": 2.8920342536239652e-09,
+   "gate_passed": true,
+   "eta_sigma1": 1e-06,
+   "exact_disc_weight": 2.319522830303102e-16,
+   "optimal_rel_err": 1.522997974471263e-08,
+   "sketched_rel_err": 1.5229979744936157e-08,
+   "max_principal_angle_deg": 7.894521330479434e-05,
+   "action": "sketched result accepted",
+   "gate": "v1_fixed_eta"
+  },
+  {
+   "mode": "validate",
+   "D": 6,
+   "n": 1296,
+   "chi": 36,
+   "family": "slow_powerlaw",
+   "posterior_est": 1.2491529843143139,
+   "gate_passed": false,
+   "eta_sigma1": 1e-06,
+   "exact_disc_weight": 0.01619318982919661,
+   "optimal_rel_err": 0.02702702702702703,
+   "action": "INV-3 fallback to ExactSVD (production behavior)",
+   "gate": "v1_fixed_eta"
+  },
+  {
+   "mode": "validate",
+   "gate": "v2_ADR-009",
+   "D": 4,
+   "n": 256,
+   "chi": 16,
+   "family": "localized_exp",
+   "posterior_est": 0.00014885409671546316,
+   "gate_threshold": 0.003354626278947852,
+   "gate_passed": true,
+   "exact_disc_weight": 1.1253517471926047e-07,
+   "optimal_rel_err": 0.00033546262790251185,
+   "sketched_rel_err": 0.0003354626279025123,
+   "max_principal_angle_deg": 8.834391605388466e-05,
+   "action": "sketched result accepted"
+  },
+  {
+   "mode": "validate",
+   "gate": "v2_ADR-009",
+   "D": 4,
+   "n": 256,
+   "chi": 16,
+   "family": "slow_powerlaw",
+   "posterior_est": 1.8481977781689325,
+   "gate_threshold": 0.5612275223209597,
+   "gate_passed": false,
+   "exact_disc_weight": 0.03454459398586085,
+   "optimal_rel_err": 0.058823529411764705,
+   "action": "INV-3 fallback to ExactSVD (production behavior)"
+  },
+  {
+   "mode": "validate",
+   "gate": "v2_ADR-009",
+   "D": 6,
+   "n": 1296,
+   "chi": 36,
+   "family": "localized_exp",
+   "posterior_est": 2.8920342536239652e-09,
+   "gate_threshold": 9.999999999999993e-07,
+   "gate_passed": true,
+   "exact_disc_weight": 2.319522830303102e-16,
+   "optimal_rel_err": 1.522997974471263e-08,
+   "sketched_rel_err": 1.5229979744936157e-08,
+   "max_principal_angle_deg": 7.894521330479434e-05,
+   "action": "sketched result accepted"
+  },
+  {
+   "mode": "validate",
+   "gate": "v2_ADR-009",
+   "D": 6,
+   "n": 1296,
+   "chi": 36,
+   "family": "slow_powerlaw",
+   "posterior_est": 1.2491529843143139,
+   "gate_threshold": 0.24464131361614364,
+   "gate_passed": false,
+   "exact_disc_weight": 0.01619318982919661,
+   "optimal_rel_err": 0.02702702702702703,
+   "action": "INV-3 fallback to ExactSVD (production behavior)"
+  }
+ ]
+}

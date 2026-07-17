@@ -1,0 +1,31 @@
+# verify-log — fresh-session environment gate
+
+Run 2026-07-17. Python 3.12.0 via `uv venv` at `tls-mbl-peps/.venv`; deps installed with
+`uv pip install -e ".[dev]"`, `uv pip install torch --index-url https://download.pytorch.org/whl/cpu`,
+`uv pip install jax`. torch==2.13.0 (CPU wheel, confirmed no CUDA link issue), jax==0.11.0.
+
+## `make verify`
+
+```
+golden_3x3.py  -> ALL PASS (51/51)
+sdrg_3site.py  -> ALL PASS (9/9)
+bench_kernel.py timing 2 3 4 -> ran clean (no gate assertions in `timing` subcommand)
+```
+
+All 51/9 checks green, matching `docs/HANDOFF.md`'s validated-numbers table (contraction
+err ≤ 2.4e-15, disc ≡ 0 at χ=D²; SDRG rule↔Schur identity ≤ 3.5e-16, convergence order → 3.00).
+
+## `make verify-jax`
+
+```
+consistency D=2: rel 2.032e-15   (HANDOFF: 2.8e-15)
+consistency D=3: rel 2.218e-14   (HANDOFF: 1.4e-14)
+T-AD-FD chi=4 (lossless, disc=0):     max rel err 1.337e-09  (< 1e-6 required)
+T-AD-FD chi=2 (truncating, disc=1.93e-02): max rel err 4.763e-09  (< 1e-6 required)
+```
+
+Both χ configurations pass, including the genuinely truncating χ=2 case per the P2 parity
+contract in CLAUDE.md. Numbers are the same order of magnitude as HANDOFF's reference run
+(8.2e-10 / 4.7e-9) — expected BLAS/platform-level variation, well inside tolerance.
+
+**Verdict: environment gate PASSED. Proceeding to P0.**

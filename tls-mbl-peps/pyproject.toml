@@ -1,0 +1,18 @@
+[project]
+name = "tlsmbl"
+version = "0.0.1"
+description = "Variational PEPS solver for TLS many-body localization with certified energy reporting"
+requires-python = ">=3.11"
+dependencies = ["numpy", "scipy", "zarr", "numcodecs", "pydantic>=2", "typer"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-benchmark", "hypothesis", "ruff", "mypy"]
+# torch installed separately -- see CLAUDE.md (PyPI default wheel is CUDA-linked)
+# jax optional, tier-2 prototype parity only: pip install jax
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

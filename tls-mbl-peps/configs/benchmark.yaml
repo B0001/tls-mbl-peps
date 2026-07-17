@@ -1,0 +1,12 @@
+# configs/benchmark.yaml — the acceptance configuration (matches the derivation's verdict regime)
+run:      { name: bench-L16, master_seed: 20260715, n_realizations: 32, workers: 8, out: runs/bench.zarr }
+model:    { L: 16, delta_min: 1.0e-3, g_J: 1.0e-3, R_c: 3, polaron_kappa: 0.0,
+            hartree: { enabled: false, K_max: 8, alpha: 0.5, tol: 1.0e-4 } }
+sdrg:     { enabled: true, omega_stop: 0.3, f_max: 0.4, keep_first_order: true, tau_sdrg: 0.05 }
+peps:     { ladder: [2, 3, 4, 6], chi_factor: 1, dtype: complex128 }
+env:      { eps_env: 1.0e-8, eps_env_E: 1.0e-7, polish: true, checkpoint_rows: true, retry_max: 3, dchi: auto }
+kernels:  { backend: sketched, oversample: 8, power_iters: 1, eta: 1.0e-6, c_gate: 10.0, probes: 6,
+            fallback_disable_rate: 0.20, eps_F: 1.0e-12 }
+optimize: { su_steps: 200, inner_iters: 20, max_outer: 400, tol_E: 1.0e-8, tol_g_scale: 1.0e-6 }
+invariants: { tau_chi: 1.0e-6, tau_tail: 0.02, allow_uncertified: false }
+observables: { tier2: { enabled: true, omega_q: 5.0GHz, g0: 0.1MHz, gamma0: 1kHz, T: 30mK } }
