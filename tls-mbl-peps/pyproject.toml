@@ -6,7 +6,9 @@ requires-python = ">=3.11"
 dependencies = ["numpy", "scipy", "zarr", "numcodecs", "pydantic>=2", "typer", "pyyaml"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-benchmark", "hypothesis", "ruff", "mypy"]
+dev = ["pytest", "pytest-benchmark", "hypothesis", "ruff", "mypy", "quimb", "numpy<2.5"]
+# quimb: independent cross-check oracle, allowed ONLY inside tests/golden/ (§4).
+# numpy<2.5 is quimb's numba transitive constraint, dev-only.
 # torch installed separately -- see CLAUDE.md (PyPI default wheel is CUDA-linked)
 # jax optional, tier-2 prototype parity only: pip install jax
 
