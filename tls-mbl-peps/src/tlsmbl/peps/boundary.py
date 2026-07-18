@@ -113,3 +113,53 @@ def build_env(
     tops, d1 = build_tops(state, chi, backend, want_grad=want_grad)
     bottoms, d2 = build_bottoms(state, chi, backend, want_grad=want_grad)
     return EnvBundle(tops=tops, bottoms=bottoms, chi=chi, disc_weights=d1 + d2)
+
+
+def extend_top(
+    state: PEPSState,
+    base: BoundaryMPS,
+    y_from: int,
+    y_to: int,
+    chi: int,
+    backend: TruncationBackend,
+    *,
+    want_grad: bool,
+    insert: dict[Site, torch.Tensor] | None = None,
+) -> dict[int, BoundaryMPS]:
+    """§8.4 incremental dressing: absorb rows y_from..y_to-1 into `base`
+    (= an existing tops[y_from]), returning the environment at each level
+    y_from+1..y_to. A dressed environment differs from the undressed one only
+    from the operator's row onward, so rows above are reused, never rebuilt --
+    per source this is <= R_c rows of work instead of L."""
+    out: dict[int, BoundaryMPS] = {}
+    cur = base
+    for y in range(y_from, y_to):
+        fat = absorb_row_top(cur, _row(state, y, insert))
+        t, stats = compress(fat, chi, backend, want_grad=want_grad)
+        cur = BoundaryMPS(t, cur.log_norm + stats.log_norm)
+        out[y + 1] = cur
+    return out
+
+
+def extend_bottom(
+    state: PEPSState,
+    base: BoundaryMPS,
+    y_from: int,
+    y_to: int,
+    chi: int,
+    backend: TruncationBackend,
+    *,
+    want_grad: bool,
+    insert: dict[Site, torch.Tensor] | None = None,
+) -> dict[int, BoundaryMPS]:
+    """Mirror of extend_top: absorb rows y_from down to y_to into `base`
+    (= an existing bottoms[y_from + 1]), returning bottoms-style environments
+    at levels y_from..y_to (level y covers rows y..L-1)."""
+    out: dict[int, BoundaryMPS] = {}
+    cur = base
+    for y in range(y_from, y_to - 1, -1):
+        fat = absorb_row_bottom(cur, _row(state, y, insert))
+        b, stats = compress(fat, chi, backend, want_grad=want_grad)
+        cur = BoundaryMPS(b, cur.log_norm + stats.log_norm)
+        out[y] = cur
+    return out

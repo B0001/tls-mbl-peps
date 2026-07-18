@@ -26,6 +26,8 @@ from tlsmbl.peps.boundary import (
     build_bottoms,
     build_env,
     build_tops,
+    extend_bottom,
+    extend_top,
 )
 from tlsmbl.peps.doublelayer import double_layer
 from tlsmbl.peps.state import PEPSState
@@ -57,6 +59,53 @@ def sandwich(
     return F.reshape(())
 
 
+class RowSplice:
+    """§8.4 prefix/suffix transfer caching for one row sandwich <T| row_y |B>.
+
+    Column prefix transfers F->_x and suffixes F<-_x are built once (O(L) E-4
+    steps each); any single insertion then costs one spliced contraction and a
+    same-row pair costs only the explicit segment between the two columns
+    (bounded by R_c). Transfer legs are (top_bond, row_horizontal, bottom_bond)
+    at the left boundary of column x."""
+
+    def __init__(self, T: BoundaryMPS, state: PEPSState, y: int, B: BoundaryMPS) -> None:
+        self.T, self.state, self.y, self.B = T, state, y, B
+        L = state.L
+        dtype = state.tensors[0][0].dtype
+        one = torch.ones(1, 1, 1, dtype=dtype)
+        self.prefix: list[torch.Tensor] = [one]
+        for x in range(L):
+            self.prefix.append(self._absorb_left(self.prefix[x], x, None))
+        self.suffix: list[torch.Tensor] = [one] * (L + 1)
+        for x in range(L - 1, -1, -1):
+            s = torch.einsum("TnB,tvT->nBtv", self.suffix[x + 1], T.tensors[x])
+            a = double_layer(state.tensors[y][x])
+            s = torch.einsum("nBtv,mvnw->Btmw", s, a)
+            self.suffix[x] = torch.einsum("Btmw,bwB->tmb", s, B.tensors[x])
+
+    def _absorb_left(
+        self, F: torch.Tensor, x: int, op: torch.Tensor | None
+    ) -> torch.Tensor:
+        a = double_layer(self.state.tensors[self.y][x], op)
+        F = torch.einsum("tmb,tvT->mbvT", F, self.T.tensors[x])
+        F = torch.einsum("mbvT,mvnw->bTnw", F, a)
+        return torch.einsum("bTnw,bwB->TnB", F, self.B.tensors[x])
+
+    @property
+    def norm(self) -> torch.Tensor:
+        return self.prefix[-1].reshape(())
+
+    def insert(self, ops: dict[int, torch.Tensor]) -> torch.Tensor:
+        """<T| row with insertions |B>: prefix at the first insertion column,
+        explicit E-4 steps across the spanned segment, suffix after the last."""
+        xs = sorted(ops)
+        x1, x2 = xs[0], xs[-1]
+        F = self.prefix[x1]
+        for x in range(x1, x2 + 1):
+            F = self._absorb_left(F, x, ops.get(x))
+        return torch.einsum("tmb,tmb->", F, self.suffix[x2 + 1])
+
+
 def _assemble(
     state: PEPSState,
     terms: HamiltonianTerms,
@@ -71,7 +120,8 @@ def _assemble(
     L = state.L
     tops, _ = build_tops(state, chi, backend, want_grad=want_grad)
     bottoms, _ = build_bottoms(state, chi, backend, want_grad=want_grad)
-    norms = [sandwich(tops[y], state, y, bottoms[y + 1]) for y in range(L)]
+    rows = [RowSplice(tops[y], state, y, bottoms[y + 1]) for y in range(L)]
+    norms = [rows[y].norm for y in range(L)]
     with torch.no_grad():
         scaled = [
             float(n.real) * np.exp(tops[y].log_norm + bottoms[y + 1].log_norm)
@@ -79,25 +129,39 @@ def _assemble(
         ]
         row_consistency = max(abs(s / scaled[0] - 1.0) for s in scaled)
 
-    cross = sorted(
-        {i if dress == "top" else j for (i, j, _) in terms.pair if i[1] != j[1]}
-    )
-    dressed: dict[Site, list[BoundaryMPS]] = {}
-    for s in cross:
+    # §8.4: one dressed environment per source site serves all its partners, and it
+    # is EXTENDED from the cached undressed environment at the source row rather
+    # than rebuilt from the lattice edge (<= R_c rows of new compressions each).
+    span: dict[Site, int] = {}
+    for i, j, _ in terms.pair:
+        if i[1] == j[1]:
+            continue
         if dress == "top":
-            dressed[s], _ = build_tops(state, chi, backend, want_grad=want_grad, insert={s: Z})
+            span[i] = max(span.get(i, i[1]), j[1])
         else:
-            dressed[s], _ = build_bottoms(state, chi, backend, want_grad=want_grad, insert={s: Z})
+            span[j] = min(span.get(j, j[1]), i[1] + 1)
+    dressed: dict[Site, dict[int, BoundaryMPS]] = {}
+    for s, extent in span.items():
+        if dress == "top":
+            dressed[s] = extend_top(
+                state, tops[s[1]], s[1], extent, chi, backend,
+                want_grad=want_grad, insert={s: Z},
+            )
+        else:
+            dressed[s] = extend_bottom(
+                state, bottoms[s[1] + 1], s[1], extent, chi, backend,
+                want_grad=want_grad, insert={s: Z},
+            )
 
     E = torch.zeros((), dtype=torch.float64)
     for (x, y), op, c in terms.onsite:
         op_mat = Z if op == "z" else X
-        v = sandwich(tops[y], state, y, bottoms[y + 1], {x: op_mat}) / norms[y]
+        v = rows[y].insert({x: op_mat}) / norms[y]
         E = E + c * v.real
     for i, j, J in terms.pair:
         (x1, y1), (x2, y2) = i, j
         if y1 == y2:
-            v = sandwich(tops[y1], state, y1, bottoms[y1 + 1], {x1: Z, x2: Z}) / norms[y1]
+            v = rows[y1].insert({x1: Z, x2: Z}) / norms[y1]
         elif dress == "top":
             # Dressed and undressed environments carry different detached
             # normalization scales; the ratio needs the constant log-norm offset
