@@ -3,7 +3,7 @@ name = "tlsmbl"
 version = "0.0.1"
 description = "Variational PEPS solver for TLS many-body localization with certified energy reporting"
 requires-python = ">=3.11"
-dependencies = ["numpy", "scipy", "zarr", "numcodecs", "pydantic>=2", "typer"]
+dependencies = ["numpy", "scipy", "zarr", "numcodecs", "pydantic>=2", "typer", "pyyaml"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-benchmark", "hypothesis", "ruff", "mypy"]
@@ -16,3 +16,22 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Anchors pytest's rootdir here. Without this, pytest walks up past the repo and can
+# adopt an unrelated ancestor config/conftest (observed: a Downloads-level conftest.py
+# that stubs out torch), silently breaking the suite.
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/tlsmbl"]
+
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "yaml", "scipy.*", "zarr.*"]
+ignore_missing_imports = true
