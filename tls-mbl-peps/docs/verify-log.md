@@ -29,3 +29,11 @@ contract in CLAUDE.md. Numbers are the same order of magnitude as HANDOFF's refe
 (8.2e-10 / 4.7e-9) — expected BLAS/platform-level variation, well inside tolerance.
 
 **Verdict: environment gate PASSED. Proceeding to P0.**
+
+## Production port session (2026-07-17/18)
+
+P0-P5 implemented and committed phase-by-phase (see git log). Final state:
+`uv run pytest tests` -> 124 passed; `TLSMBL_FULL_GOLD=1` adds the slow gates
+(L=4 golden grid, strong-coupling T-GOLD-ED, T-PERF exponent gap: measured 4.16).
+ruff + mypy --strict clean. `make verify` / `make verify-jax` (prototype tier)
+unchanged and green.

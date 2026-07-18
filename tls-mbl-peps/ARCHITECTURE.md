@@ -519,6 +519,22 @@ Every field validated with ranges; unknown keys are a hard error (`extra='forbid
 
 **Validation provenance (executed prototypes).** The D3 kernel benchmark and a 3×3 golden battery (51/51 checks) have already been executed against this spec: ED oracle verified (sparse ≡ dense to 10⁻¹⁵, J=0 analytic sum to 10⁻¹⁶); einsums E-1..E-5, zip-up compression, dressed-environment cross-row correlators (§8.4), full energy assembly, the INV-7 guard, and sampler determinism all verified against an independent brute-force statevector oracle to ≤ 3×10⁻¹⁵, with identically zero discarded weight at χ=D². Two spec amendments resulted (ADR-009, ADR-010). Phase-2 execution (JAX substrate, ADR-011): the differentiable energy graph reproduces the certified numpy engine to 3×10⁻¹⁵; T-AD-FD passes at 8×10⁻¹⁰ (lossless χ) and 4.7×10⁻⁹ (χ=2, discarded weight 1.9×10⁻²); LBFGS on 3×3 reaches relative ED gaps of 7×10⁻⁹ (g_J=10⁻³, D=2, product init, 203 iters — §10.1 init empirically validated), 2.6×10⁻⁷ (g_J=0.3, D=2) and 7.2×10⁻⁸ (g_J=0.3, D=3, monotone in D), all variational-bound-respecting, ≈7 ms/iter (D=2) post-compile. The prototype files `bench_kernel.py` and `golden_3x3.py` are normative seeds for `kernels/` and `tests/golden/` respectively; `ad_phase2.py` is the normative seed for `peps/autodiff.py` and `optimize/`. 4×4 execution (T-GOLD-ED at L=4): sparse-Lanczos ED at 2¹⁶ verified (eigen-residual 10⁻¹⁴, J=0 analytic 2×10⁻¹⁴, 98 dipolar pair terms, ~2 s); engines agree to 3×10⁻¹⁴ at the provably lossless χ=16, while at truncating χ on *random* states they disagree at √(disc) scale — flat-spectrum truncation is gauge-ambiguous, so **cross-engine agreement is not a valid certificate under truncation; INV-2 stability is** (this motivates ε_F broadening and the certificate design); T-AD-FD holds at 4×4 through real truncation (2.9×10⁻⁹ at disc 3.8×10⁻⁵); T-GOLD-ED: g_J=0.3 D=2 relative gap 8.9×10⁻⁸ (4000 iters, optimizer-floor-limited, ≈2 ms/iter), g_J=10⁻³ 6.4×10⁻¹⁰, truncated-path χ=6 run reaches 2.0×10⁻⁷ with INV-2 stability 1.4×10⁻¹¹ and discarded weight collapsing to 2×10⁻¹⁵ on the optimized state — direct empirical confirmation of the localized-phase spectral-decay premise underlying Stage B and INV-3. `phase3_4x4.py` is the normative seed for the L=4 golden tests. T-SDRG-3SITE executed: 9/9 (three random draws × site / AF-bond / F-bond decimation); rule↔Schur identities at ~2×10⁻¹⁶; local eigenvalue convergence orders 2.9–3.3 tending to 3.00; two factor-2 coefficient errors in §9's original prose discovered and corrected in place (ADR-013); `sdrg_3site.py` is the normative seed for `sdrg/rules.py` and its golden test. Converged D≥3 runs at L=4 are deferred to production CI (per-iteration cost exceeds this container's session budget — precisely the regime the sketched kernel and multicore target address).
 
+**Production port provenance (July 2026, torch).** P0–P5 implemented in `src/tlsmbl/`
+with all §16 exit gates green in the test suite (124 tests): P0 lint/mypy-strict/T-DET
+config hashing/INV-6 refusal; P1 sampler bitwise-parity with the prototype oracle,
+exact H-matrix identity, 12 stored ED fixtures (ADR-014); P2 T-GOLD-ED (weak 1e-7,
+strong 1e-5 full-gold), T-GOLD-XCHECK (quimb, 1e-9), T-AD-FD (1.3e-9 lossless /
+4.8e-9 truncating), T-INV-1/2/4/7, §8.5 hardened SVD backward validated against
+native vjp + FD (measured finding: at *exact* degeneracy no backward computable from
+(gU,gS,gVh) matches FD — native torch fails too; contract is exactness above ε_F,
+finite bounded gradient below); P3 T-INV-3 (ADR-009 case optimal to 1e-9, slow-decay
+fallback), T-EQ-BACKENDS (angle < 5e-6 rad on the prototype instance), T-PERF
+exponent gap 4.16 (gate ≥ 1.6); P4 T-SDRG-3SITE via prototype Schur oracle (Tier-I
+1e-12, Tier-II order ≥ 2.9; two composition defects found and fixed: pinned-term/E0
+double-count, unrotated pinned-site bonds), T-INV-8 bypass, A/B harness; P5
+resume-after-kill (loses ≤ 1 rung), ensemble T-DET (bitwise), INV-5 gate + audit
+CLI. P6/P7 remain conditional and unopened.
+
 ---
 
 ## §15. Performance model and budgets
