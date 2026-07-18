@@ -33,19 +33,55 @@ def _stub(command: str, lands_in: str) -> None:
 
 @app.command()
 def run(config: Path = typer.Argument(..., exists=True, help="Run config YAML.")) -> None:
-    """Validate CONFIG and print its manifest. Full pipeline lands in Phase 5."""
+    """Full pipeline: sample -> SDRG -> ladder -> finalize -> store. Resumable."""
+    from tlsmbl.ensemble.orchestrate import run_ensemble
+
     cfg = Config.from_yaml(config)
     manifest = build_manifest(cfg)
     typer.echo(f"config_hash={manifest.config_hash}")
     typer.echo(f"master_seed={manifest.master_seed}")
     typer.echo(f"git_sha={manifest.git_sha} dirty={manifest.git_dirty}")
-    _stub("run", "Phase 5 (ensemble orchestration)")
+    out = run_ensemble(cfg, progress=lambda k, s: typer.echo(f"realization {k}: {s}"))
+    typer.echo(f"run complete: {out}")
 
 
 @app.command()
-def verify(artifact: Path = typer.Argument(..., help="run.zarr to re-check.")) -> None:
-    """Offline invariant re-check (INV audit)."""
-    _stub("verify", "Phase 5 (io/store.py)")
+def verify(artifact: Path = typer.Argument(..., exists=True, help="run.zarr to re-check.")) -> None:
+    """Offline invariant re-check (INV audit) on stored reports."""
+    from tlsmbl.io import store as _store
+
+    root = _store.open_run(artifact)
+    manifest = _store.read_attr_dict(root, "manifest") if "manifest" in root.attrs else {}
+    thresholds = dict(manifest.get("invariant_thresholds", {}))
+    tau_chi = float(thresholds.get("tau_chi", 1e-6))
+    tau_tail = float(thresholds.get("tau_tail", 0.02))
+    failures = 0
+    for name in _store.list_realizations(root):
+        g = _store.subgroup(root, f"realizations/{name}")
+        if _store.get_stage(g) != "finalized":
+            typer.echo(f"{name}: INCOMPLETE (stage={_store.get_stage(g)})")
+            failures += 1
+            continue
+        rep = _store.read_attr_dict(g, "report")
+        checks = {
+            "INV-2": (
+                len(rep["chi_stability"]) == 2
+                and abs(rep["chi_stability"][0] - rep["chi_stability"][1]) <= tau_chi
+            ),
+            "INV-5": rep["tail_bound"] <= tau_tail * abs(rep["e_per_site"]),
+            "certified-flag": bool(rep["certified"])
+            or not thresholds.get("allow_uncertified", False),
+        }
+        bad = [k for k, ok in checks.items() if not ok]
+        if bad and rep["certified"]:
+            typer.echo(f"{name}: FAIL {bad} but stored as certified")
+            failures += 1
+        else:
+            typer.echo(
+                f"{name}: ok (certified={rep['certified']}, "
+                f"disc={rep['max_disc_weight']:.2e}, gap={rep['updown_gap']:.2e})"
+            )
+    raise typer.Exit(code=1 if failures else 0)
 
 
 @app.command()
@@ -74,9 +110,21 @@ def bench(
 
 
 @app.command()
-def aggregate(artifact: Path = typer.Argument(..., help="run.zarr to aggregate.")) -> None:
+def aggregate(
+    artifact: Path = typer.Argument(..., exists=True, help="run.zarr to aggregate."),
+    allow_uncertified: bool = typer.Option(False, help="Include uncertified, labeled."),
+) -> None:
     """Disorder-averaged observables + REPORT.md (D2 deliverable)."""
-    _stub("aggregate", "Phase 5 (ensemble/aggregate.py)")
+    from tlsmbl.ensemble.aggregate import aggregate_run
+
+    agg = aggregate_run(artifact, allow_uncertified=allow_uncertified)
+    typer.echo(
+        f"aggregated {agg.n_used}/{agg.n_total} realizations "
+        f"({agg.n_certified} certified)"
+    )
+    typer.echo(f"e_per_site = {agg.e_per_site[0]:+.9f} "
+               f"[{agg.e_per_site[1]:+.9f}, {agg.e_per_site[2]:+.9f}]")
+    typer.echo(f"q_EA = {agg.q_ea[0]:.6f}; REPORT.md written next to the store")
 
 
 @app.command(name="ab-test")
