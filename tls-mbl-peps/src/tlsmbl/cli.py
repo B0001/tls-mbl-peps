@@ -80,9 +80,25 @@ def aggregate(artifact: Path = typer.Argument(..., help="run.zarr to aggregate."
 
 
 @app.command(name="ab-test")
-def ab_test(config: Path = typer.Argument(..., help="A/B config YAML.")) -> None:
-    """SDRG preconditioning value measurement (D4 deliverable)."""
-    _stub("ab-test", "Phase 4 (SDRG A/B harness)")
+def ab_test(config: Path = typer.Argument(..., exists=True, help="A/B config YAML.")) -> None:
+    """SDRG preconditioning value measurement (D4 deliverable). A negative result
+    is a valid outcome -- Stage A is quarantined by design."""
+    import yaml
+
+    from tlsmbl.sdrg.ab import run_ab
+
+    cfg = yaml.safe_load(config.read_text())
+    report = run_ab(**cfg)
+    for r in report.records:
+        typer.echo(
+            f"k={r.k}  E_ED={r.e_ed:+.9f}  gap A(sdrg)={r.gap_with_sdrg:.3e}  "
+            f"B(off)={r.gap_without_sdrg:.3e}  decimations={r.n_decimations}"
+            f"{'  BYPASSED' if r.sdrg_bypassed else ''}  ledger={r.ledger_total:.2e}"
+        )
+    typer.echo(
+        f"mean gap: with SDRG {report.mean_gap_with:.3e}, "
+        f"without {report.mean_gap_without:.3e} -> {report.verdict}"
+    )
 
 
 if __name__ == "__main__":

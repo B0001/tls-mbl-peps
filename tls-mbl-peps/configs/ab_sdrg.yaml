@@ -1,0 +1,13 @@
+# SDRG A/B harness (D4 deliverable): Stage-A-on vs Stage-A-off at matched D
+# against the ED oracle. §16 P4 exit wants >= 16 realizations; L=4 keeps ED cheap.
+master_seed: 20260716
+n_realizations: 16
+L: 4
+g_J: 0.3
+D: 2
+omega_stop: 0.3
+f_max: 0.4
+keep_first_order: true
+tau_sdrg: 0.05
+max_outer: 60
+inner_iters: 20
