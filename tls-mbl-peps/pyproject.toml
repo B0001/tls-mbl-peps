@@ -12,6 +12,9 @@ dev = ["pytest", "pytest-benchmark", "hypothesis", "ruff", "mypy", "quimb", "num
 # torch installed separately -- see CLAUDE.md (PyPI default wheel is CUDA-linked)
 # jax optional, tier-2 prototype parity only: pip install jax
 
+[project.scripts]
+tlsmbl = "tlsmbl.cli:app"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

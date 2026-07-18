@@ -51,10 +51,26 @@ def verify(artifact: Path = typer.Argument(..., help="run.zarr to re-check.")) -
 @app.command()
 def bench(
     component: str = typer.Argument(..., help="e.g. 'kernels'"),
-    D: list[int] = typer.Option(None, "--D", help="Bond dimensions to sweep."),
+    D: list[int] = typer.Option([2, 3, 4, 6], "--D", help="Bond dimensions to sweep."),
+    reps: int = typer.Option(5, help="Repetitions per point (median reported)."),
 ) -> None:
-    """D-scaling microbenchmark (D3 deliverable)."""
-    _stub("bench", "Phase 3 (sketched backend + microbench)")
+    """D-scaling microbenchmark (D3 deliverable): exact vs sketched kernel."""
+    if component != "kernels":
+        typer.echo(f"unknown bench component {component!r}", err=True)
+        raise typer.Exit(code=1)
+    from tlsmbl.kernels.bench import run_kernel_bench
+
+    res = run_kernel_bench(list(D), reps=reps)
+    for p in res.points:
+        speedup = p.exact_s / p.sketched_s
+        typer.echo(
+            f"D={p.D} n={p.n:5d}  exact={p.exact_s:.4g}s  sketched={p.sketched_s:.4g}s"
+            f"  speedup={speedup:5.1f}x  gate_passed={p.gate_passed}"
+        )
+    typer.echo(
+        f"exponents: exact {res.exact_exponent:.2f}, sketched {res.sketched_exponent:.2f}, "
+        f"gap {res.exponent_gap:.2f} (T-PERF gate >= 1.6)"
+    )
 
 
 @app.command()
