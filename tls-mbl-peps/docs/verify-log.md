@@ -37,3 +37,10 @@ P0-P5 implemented and committed phase-by-phase (see git log). Final state:
 (L=4 golden grid, strong-coupling T-GOLD-ED, T-PERF exponent gap: measured 4.16).
 ruff + mypy --strict clean. `make verify` / `make verify-jax` (prototype tier)
 unchanged and green.
+
+## Smoke budget gate (2026-07-19)
+
+`tlsmbl run configs/smoke.yaml` end-to-end on an 8-core/16GB M-series laptop:
+**33 s wall** (§16 budget: < 5 min on 4 cores). Both realizations certified
+(disc <= 1.2e-22, up/down gap <= 8.9e-16); `verify` clean; `aggregate` wrote
+REPORT.md (q_EA = 0.907 at g_J = 1e-3 — deep localized regime).

@@ -1,0 +1,15 @@
+# Local pilot production run: full pipeline at L=8, sketched backend, overnight-
+# class on a laptop. De-risks benchmark.yaml (L=16) and produces a real REPORT.md.
+# SDRG off per the D4 A/B result (docs/ab-report.md): in this weak-coupling
+# localized regime Stage A only adds PT2 bias.
+run:      { name: pilot-L8, master_seed: 20260719, n_realizations: 4, workers: 4, out: runs/pilot_L8.zarr }
+model:    { L: 8, delta_min: 1.0e-3, g_J: 1.0e-3, R_c: 3, polaron_kappa: 0.0,
+            hartree: { enabled: false, K_max: 8, alpha: 0.5, tol: 1.0e-4 } }
+sdrg:     { enabled: false, omega_stop: 0.3, f_max: 0.4, keep_first_order: true, tau_sdrg: 0.05 }
+peps:     { ladder: [2, 3], chi_factor: 1, dtype: complex128 }
+env:      { eps_env: 1.0e-8, eps_env_E: 1.0e-6, polish: true, checkpoint_rows: true, retry_max: 3, dchi: auto }
+kernels:  { backend: sketched, oversample: 8, power_iters: 1, eta: 1.0e-6, c_gate: 10.0, probes: 6,
+            fallback_disable_rate: 0.20, eps_F: 1.0e-12 }
+optimize: { su_steps: 0, inner_iters: 20, max_outer: 60, tol_E: 1.0e-8, tol_g_scale: 1.0e-6 }
+invariants: { tau_chi: 1.0e-6, tau_tail: 0.02, allow_uncertified: false }
+observables: { tier2: { enabled: false } }
