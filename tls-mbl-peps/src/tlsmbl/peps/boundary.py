@@ -163,3 +163,122 @@ def extend_bottom(
         cur = BoundaryMPS(b, cur.log_norm + stats.log_norm)
         out[y] = cur
     return out
+
+
+@dataclass
+class BatchedBoundaryMPS:
+    """B independent boundary MPSs sharing shapes: tensors (B, l, v, r)."""
+
+    tensors: list[torch.Tensor]
+    log_norm: torch.Tensor  # (B,) detached
+
+    def element(self, b: int) -> BoundaryMPS:
+        return BoundaryMPS(
+            [t[b] for t in self.tensors], float(self.log_norm[b])
+        )
+
+
+def extend_top_batched(
+    state: PEPSState,
+    base: BoundaryMPS,
+    y_from: int,
+    y_to: int,
+    chi: int,
+    backend: TruncationBackend,
+    xs: list[int],
+    op: torch.Tensor,
+    *,
+    want_grad: bool,
+) -> dict[int, BatchedBoundaryMPS]:
+    """Batched §8.4 dressing for all sources in row y_from at columns `xs`,
+    sharing the undressed base: one batch element per source, absorbed and
+    compressed together (LAPACK-batched SVDs). Only the source row differs
+    between elements -- and only at each element's own column -- so absorption
+    uses the shared plain double layer everywhere and swaps in the single
+    shared dressed tensor on the matching (element, column) slots."""
+    from tlsmbl.kernels.zipup import compress_batched
+
+    B = len(xs)
+    L = state.L
+    xs_t = torch.tensor(xs)
+    cur_tensors = [
+        m.unsqueeze(0).expand(B, *m.shape) for m in base.tensors
+    ]
+    cur_log = torch.full((B,), base.log_norm, dtype=torch.float64)
+    out: dict[int, BatchedBoundaryMPS] = {}
+    for y in range(y_from, y_to):
+        fat: list[torch.Tensor] = []
+        for x in range(L):
+            plain = double_layer(state.tensors[y][x])
+            m = cur_tensors[x]
+            t_plain = torch.einsum("Blvr,avbw->Blawrb", m, plain)
+            if y == y_from and bool((xs_t == x).any()):
+                dressed = double_layer(state.tensors[y][x], op)
+                t_dressed = torch.einsum("Blvr,avbw->Blawrb", m, dressed)
+                mask = (xs_t == x).view(B, 1, 1, 1, 1, 1)
+                t = torch.where(mask, t_dressed, t_plain)
+            else:
+                t = t_plain
+            fat.append(
+                t.reshape(
+                    B,
+                    m.shape[1] * plain.shape[0],
+                    plain.shape[3],
+                    m.shape[3] * plain.shape[2],
+                )
+            )
+        comp, stats = compress_batched(fat, chi, backend, want_grad=want_grad)
+        cur_tensors = comp
+        cur_log = cur_log + stats.log_norm
+        out[y + 1] = BatchedBoundaryMPS(tensors=comp, log_norm=cur_log)
+    return out
+
+
+def extend_bottom_batched(
+    state: PEPSState,
+    base: BoundaryMPS,
+    y_from: int,
+    y_to: int,
+    chi: int,
+    backend: TruncationBackend,
+    xs: list[int],
+    op: torch.Tensor,
+    *,
+    want_grad: bool,
+) -> dict[int, BatchedBoundaryMPS]:
+    """Mirror of extend_top_batched: absorb rows y_from down to y_to (level y
+    covers rows y..L-1) for all sources in row y_from at columns `xs`."""
+    from tlsmbl.kernels.zipup import compress_batched
+
+    B = len(xs)
+    L = state.L
+    xs_t = torch.tensor(xs)
+    cur_tensors = [m.unsqueeze(0).expand(B, *m.shape) for m in base.tensors]
+    cur_log = torch.full((B,), base.log_norm, dtype=torch.float64)
+    out: dict[int, BatchedBoundaryMPS] = {}
+    for y in range(y_from, y_to - 1, -1):
+        fat: list[torch.Tensor] = []
+        for x in range(L):
+            plain = double_layer(state.tensors[y][x])
+            m = cur_tensors[x]
+            t_plain = torch.einsum("Blwr,avbw->Blavrb", m, plain)
+            if y == y_from and bool((xs_t == x).any()):
+                dressed = double_layer(state.tensors[y][x], op)
+                t_dressed = torch.einsum("Blwr,avbw->Blavrb", m, dressed)
+                mask = (xs_t == x).view(B, 1, 1, 1, 1, 1)
+                t = torch.where(mask, t_dressed, t_plain)
+            else:
+                t = t_plain
+            fat.append(
+                t.reshape(
+                    B,
+                    m.shape[1] * plain.shape[0],
+                    plain.shape[1],
+                    m.shape[3] * plain.shape[2],
+                )
+            )
+        comp, stats = compress_batched(fat, chi, backend, want_grad=want_grad)
+        cur_tensors = comp
+        cur_log = cur_log + stats.log_norm
+        out[y] = BatchedBoundaryMPS(tensors=comp, log_norm=cur_log)
+    return out

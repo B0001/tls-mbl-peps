@@ -87,3 +87,63 @@ def compress(
         log_norm=float(torch.log(scale)),
         fallback_count=fallbacks,
     )
+
+
+@dataclass
+class BatchedCompressStats:
+    max_disc_weight: torch.Tensor  # (B,) detached
+    log_norm: torch.Tensor  # (B,) detached
+
+
+def compress_batched(
+    fat_mps: list[torch.Tensor],  # per site: (B, k, w, m)
+    chi: int,
+    backend: "object",
+    *,
+    want_grad: bool,
+) -> tuple[list[torch.Tensor], BatchedCompressStats]:
+    """Batched ADR-010 compression of B independent fat boundary MPSs sharing
+    shapes (the §8.4 dressed-environment batch). Exact backend only: the batch is
+    one LAPACK-batched SVD per site instead of B python-level kernel calls.
+    Backends without `truncate_batched` (sketched) fall back to element loops at
+    the caller."""
+    from tlsmbl.kernels.svd import ExactSVD, svd_gauge_fixed
+
+    exact = backend if isinstance(backend, ExactSVD) else ExactSVD(
+        eps_F=getattr(backend, "eps_F", None)
+    )
+    eps_F = exact.eps_F
+    mps = list(fat_mps)
+    B = mps[0].shape[0]
+    for x in range(len(mps) - 1, 0, -1):  # exact right-canonicalization, batched
+        _, k, w, m = mps[x].shape
+        mat = mps[x].reshape(B, k, w * m)
+        if want_grad:
+            U, S, Vh = svd_gauge_fixed(mat, eps_F)  # ADR-011
+            mps[x] = Vh.reshape(B, Vh.shape[-2], w, m)
+            mps[x - 1] = torch.einsum(
+                "bawk,bkr->bawr", mps[x - 1], U * S.to(U.dtype).unsqueeze(-2)
+            )
+        else:
+            Q, R = torch.linalg.qr(mat.mH)
+            mps[x] = Q.mH.reshape(B, Q.shape[-1], w, m)
+            mps[x - 1] = torch.einsum("bawk,bkr->bawr", mps[x - 1], R.mH)
+    carry = torch.ones(B, 1, 1, dtype=mps[0].dtype, device=mps[0].device)
+    out: list[torch.Tensor] = []
+    max_disc = torch.zeros(B, dtype=torch.float64)
+    for T in mps:
+        W = torch.einsum("bkK,bKwm->bkwm", carry, T)
+        _, k, w, m = W.shape
+        U, S, Vh, disc = exact.truncate_batched(W.reshape(B, k * w, m), chi)
+        max_disc = torch.maximum(max_disc, disc)
+        kk = S.shape[-1]
+        out.append(U.reshape(B, k, w, kk))
+        carry = S.to(Vh.dtype).unsqueeze(-1) * Vh
+    out[-1] = out[-1] * carry[:, 0, 0].reshape(B, 1, 1, 1)
+    scale = (
+        torch.linalg.norm(out[-1].reshape(B, -1), dim=-1).detach().clamp_min(1e-300)
+    )
+    out[-1] = out[-1] / scale.reshape(B, 1, 1, 1).to(out[-1].dtype)
+    return out, BatchedCompressStats(
+        max_disc_weight=max_disc, log_norm=torch.log(scale)
+    )

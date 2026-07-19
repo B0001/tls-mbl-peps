@@ -26,8 +26,8 @@ from tlsmbl.peps.boundary import (
     build_bottoms,
     build_env,
     build_tops,
-    extend_bottom,
-    extend_top,
+    extend_bottom_batched,
+    extend_top_batched,
 )
 from tlsmbl.peps.doublelayer import double_layer
 from tlsmbl.peps.state import PEPSState
@@ -129,9 +129,12 @@ def _assemble(
         ]
         row_consistency = max(abs(s / scaled[0] - 1.0) for s in scaled)
 
-    # §8.4: one dressed environment per source site serves all its partners, and it
-    # is EXTENDED from the cached undressed environment at the source row rather
+    # §8.4: one dressed environment per source site serves all its partners,
+    # EXTENDED from the cached undressed environment at the source row rather
     # than rebuilt from the lattice edge (<= R_c rows of new compressions each).
+    # Sources sharing a row are batched into one LAPACK-batched compression
+    # (exact SVD -- reference backend, always certifiable -- regardless of the
+    # sketched setting; batching beats per-call sketching at D <= 4 sizes).
     span: dict[Site, int] = {}
     for i, j, _ in terms.pair:
         if i[1] == j[1]:
@@ -140,18 +143,27 @@ def _assemble(
             span[i] = max(span.get(i, i[1]), j[1])
         else:
             span[j] = min(span.get(j, j[1]), i[1] + 1)
+    by_row: dict[int, list[Site]] = {}
+    for s in span:
+        by_row.setdefault(s[1], []).append(s)
     dressed: dict[Site, dict[int, BoundaryMPS]] = {}
-    for s, extent in span.items():
+    for y_src, sources in sorted(by_row.items()):
+        sources = sorted(sources)
+        xs = [s[0] for s in sources]
         if dress == "top":
-            dressed[s] = extend_top(
-                state, tops[s[1]], s[1], extent, chi, backend,
-                want_grad=want_grad, insert={s: Z},
+            extent = max(span[s] for s in sources)
+            batch = extend_top_batched(
+                state, tops[y_src], y_src, extent, chi, backend, xs, Z,
+                want_grad=want_grad,
             )
         else:
-            dressed[s] = extend_bottom(
-                state, bottoms[s[1] + 1], s[1], extent, chi, backend,
-                want_grad=want_grad, insert={s: Z},
+            extent = min(span[s] for s in sources)
+            batch = extend_bottom_batched(
+                state, bottoms[y_src + 1], y_src, extent, chi, backend, xs, Z,
+                want_grad=want_grad,
             )
+        for b, s in enumerate(sources):
+            dressed[s] = {lvl: env.element(b) for lvl, env in batch.items()}
 
     E = torch.zeros((), dtype=torch.float64)
     for (x, y), op, c in terms.onsite:

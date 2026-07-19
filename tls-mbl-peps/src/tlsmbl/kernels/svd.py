@@ -25,8 +25,9 @@ _PHASE_FLOOR = 1e-300
 
 
 def _gauge_phase(U: torch.Tensor) -> torch.Tensor:
-    idx = U.abs().argmax(dim=0)
-    ph = U[idx, torch.arange(U.shape[1], device=U.device)]
+    """Per-column phase of the largest-modulus entry; batch-aware ((..., m, k))."""
+    idx = U.abs().argmax(dim=-2)
+    ph = torch.gather(U, -2, idx.unsqueeze(-2)).squeeze(-2)
     return ph / ph.abs().clamp_min(_PHASE_FLOOR)
 
 
@@ -42,8 +43,8 @@ class _HardenedSVD(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         U, S, Vh = torch.linalg.svd(A, full_matrices=False)
         ph = _gauge_phase(U)
-        U = U * ph.conj().unsqueeze(0)
-        Vh = Vh * ph.unsqueeze(1)
+        U = U * ph.conj().unsqueeze(-2)
+        Vh = Vh * ph.unsqueeze(-1)
         ctx.save_for_backward(U, S, Vh)
         ctx.eps_F = eps_F
         return U, S, Vh
@@ -64,10 +65,12 @@ class _HardenedSVD(torch.autograd.Function):
         # splittings lose the finite intra-block piece -- unavoidable for ANY
         # filter over (gU, gS, gVh), since the degenerate basis is arbitrary
         # (measured: torch's native backward fails FD there too).
+        # All index ops use the trailing two dims so the formula is batch-aware
+        # ((..., m, n) operands from the batched dressed-environment path).
         s2 = S**2
-        diff = s2.unsqueeze(0) - s2.unsqueeze(1)  # diff[i, j] = s_j^2 - s_i^2
+        diff = s2.unsqueeze(-2) - s2.unsqueeze(-1)  # diff[..., i, j] = s_j^2 - s_i^2
         F = diff / (diff**2 + eps**2)
-        F.fill_diagonal_(0.0)
+        torch.diagonal(F, dim1=-2, dim2=-1).zero_()
         F = F.to(U.dtype)
         Sd = S.to(U.dtype)
         # Regularized inverse (same broadening scale): tiny singular values carry
@@ -78,14 +81,14 @@ class _HardenedSVD(torch.autograd.Function):
         VhgV = V.mH @ gV
         J = F * (UhgU - UhgU.mH)  # skew projections, broadened
         K = F * (VhgV - VhgV.mH)
-        core = J * Sd.unsqueeze(0) + Sd.unsqueeze(1) * K + torch.diag(gS.to(U.dtype))
+        core = J * Sd.unsqueeze(-2) + Sd.unsqueeze(-1) * K + torch.diag_embed(gS.to(U.dtype))
         if U.is_complex():
             # Imaginary-diagonal correction: residual U(1) phase freedom per column.
-            imdiag = torch.diagonal(UhgU).imag.to(U.dtype)
-            core = core + 1.0j * torch.diag(imdiag * Sinv)
+            imdiag = torch.diagonal(UhgU, dim1=-2, dim2=-1).imag.to(U.dtype)
+            core = core + 1.0j * torch.diag_embed(imdiag * Sinv)
         dA = U @ core @ Vh
-        dA = dA + (gU - U @ UhgU) * Sinv.unsqueeze(0) @ Vh
-        dA = dA + U @ (Sinv.unsqueeze(1) * (gV.mH - VhgV.mH @ V.mH))
+        dA = dA + (gU - U @ UhgU) * Sinv.unsqueeze(-2) @ Vh
+        dA = dA + U @ (Sinv.unsqueeze(-1) * (gV.mH - VhgV.mH @ V.mH))
         return dA, None
 
 
@@ -99,7 +102,7 @@ def svd_gauge_fixed(
         return U, S, Vh
     U, S, Vh = torch.linalg.svd(A, full_matrices=False)
     ph = _gauge_phase(U)
-    return U * ph.conj().unsqueeze(0), S, Vh * ph.unsqueeze(1)
+    return U * ph.conj().unsqueeze(-2), S, Vh * ph.unsqueeze(-1)
 
 
 @dataclass(frozen=True)
@@ -119,3 +122,16 @@ class ExactSVD:
         return TruncResult(
             U=U[:, :chi], S=S[:chi], Vh=Vh[:chi], disc_weight=disc, posterior_err=None
         )
+
+    def truncate_batched(
+        self, Wmat: torch.Tensor, chi: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Batched exact truncation of (B, m, n) operands -- one LAPACK-batched SVD
+        for a whole batch of independent dressed-environment compressions.
+        Returns (U (B,m,chi'), S (B,chi'), Vh (B,chi',n), disc (B,) detached)."""
+        Wmat = check_operand(Wmat)
+        U, S, Vh = svd_gauge_fixed(Wmat, self.eps_F)
+        with torch.no_grad():
+            tot = (S**2).sum(dim=-1).clamp_min(1e-300)
+            disc = (S[..., chi:] ** 2).sum(dim=-1) / tot
+        return U[..., :chi], S[..., :chi], Vh[..., :chi, :], disc
