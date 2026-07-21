@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 import torch
 
+from tlsmbl.core.guards import NumericalCorruption
 from tlsmbl.kernels.interface import TruncationBackend
 
 
@@ -42,6 +43,18 @@ def _right_canonicalize(
     for x in range(len(mps) - 1, 0, -1):
         k, w, m = mps[x].shape
         mat = mps[x].reshape(k, w * m)
+        if not torch.isfinite(mat.real).all() or (
+            mat.is_complex() and not torch.isfinite(mat.imag).all()
+        ):
+            # INV-7: catch here, not at the LAPACK call site -- a clear, provenanced
+            # error instead of a cryptic SVD convergence failure. Expected to fire
+            # occasionally from an oversized LBFGS line-search trial step (the
+            # caller -- optimize/lbfgs_driver.py's closure -- treats this as a
+            # rejected step, not a fatal certification failure).
+            raise NumericalCorruption(
+                f"INV-7: non-finite operand entering right-canonicalization "
+                f"(site index {x}, shape {tuple(mps[x].shape)})"
+            )
         if want_grad:
             U, S, Vh = svd_gauge_fixed(mat, eps_F)  # ADR-011; hardened when eps_F set
             mps[x] = Vh.reshape(Vh.shape[0], w, m)

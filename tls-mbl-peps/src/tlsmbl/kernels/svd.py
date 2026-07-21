@@ -9,19 +9,78 @@ Lorentzian-broadened vjp F_ij = (s_j^2 - s_i^2) / ((s_j^2 - s_i^2)^2 + eps_F^2)
 instead of torch's native one, so exactly-degenerate spectra cannot emit NaN into
 the gradient. Validated against the native backward on non-degenerate operands and
 against finite differences on degenerate ones (tests/unit/test_svd_hardened.py).
+
+Convergence fallback (found running the L=8 pilot, 2026-07-20): torch's default CPU
+SVD driver (LAPACK `gesdd`, divide-and-conquer) occasionally raises `LinAlgError`
+("failed to converge") on ill-conditioned operands -- observed on macOS Accelerate
+BLAS during a real LBFGS run, not a synthetic case. CUDA's `driver=` kwarg to pick
+the more robust QR-based `gesvd` isn't available on CPU, so on that error
+`_svd_robust` recomputes via scipy's `lapack_driver="gesvd"`, per batch element if
+needed. This is a values-only fallback (forward pass); the custom backward above is
+unaffected either way.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+import scipy.linalg
 import torch
 
 from tlsmbl.kernels.common import check_operand
 from tlsmbl.kernels.interface import TruncResult
 
 _PHASE_FLOOR = 1e-300
+
+
+def _svd_scipy_fallback(A: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One (m, n) matrix via scipy's gesvd driver. No autograd needed here --
+    used only as a forward-pass value fallback."""
+    np_A = A.detach().cpu().numpy()
+    U, S, Vh = scipy.linalg.svd(np_A, full_matrices=False, lapack_driver="gesvd")
+    real_dtype = torch.float64 if A.dtype == torch.complex128 else torch.float32
+    return (
+        torch.from_numpy(np.ascontiguousarray(U)).to(device=A.device, dtype=A.dtype),
+        torch.from_numpy(np.ascontiguousarray(S)).to(device=A.device, dtype=real_dtype),
+        torch.from_numpy(np.ascontiguousarray(Vh)).to(device=A.device, dtype=A.dtype),
+    )
+
+
+_LinAlgError: type[Exception] = getattr(torch.linalg, "LinAlgError")  # noqa: B009 -- not in stubs
+
+
+def _svd_robust(A: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """torch.linalg.svd with a scipy/gesvd fallback on convergence failure.
+    Batch-aware: a batch-level failure retries per element, so one bad operand in
+    a batch of dressed-environment compressions doesn't sink the whole batch."""
+    try:
+        U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+        return U, S, Vh
+    except _LinAlgError:
+        pass
+    warnings.warn(
+        "torch.linalg.svd failed to converge (gesdd); falling back to scipy gesvd",
+        stacklevel=2,
+    )
+    if A.dim() == 2:
+        return _svd_scipy_fallback(A)
+    flat = A.reshape(-1, *A.shape[-2:])
+    Us, Ss, Vhs = [], [], []
+    for i in range(flat.shape[0]):
+        try:
+            u, s, vh = torch.linalg.svd(flat[i], full_matrices=False)
+        except _LinAlgError:
+            u, s, vh = _svd_scipy_fallback(flat[i])
+        Us.append(u)
+        Ss.append(s)
+        Vhs.append(vh)
+    U = torch.stack(Us).reshape(*A.shape[:-2], *Us[0].shape)
+    S = torch.stack(Ss).reshape(*A.shape[:-2], *Ss[0].shape)
+    Vh = torch.stack(Vhs).reshape(*A.shape[:-2], *Vhs[0].shape)
+    return U, S, Vh
 
 
 def _gauge_phase(U: torch.Tensor) -> torch.Tensor:
@@ -41,7 +100,7 @@ class _HardenedSVD(torch.autograd.Function):
     def forward(
         ctx: Any, A: torch.Tensor, eps_F: float
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+        U, S, Vh = _svd_robust(A)
         ph = _gauge_phase(U)
         U = U * ph.conj().unsqueeze(-2)
         Vh = Vh * ph.unsqueeze(-1)
@@ -100,7 +159,10 @@ def svd_gauge_fixed(
     if eps_F is not None and torch.is_grad_enabled() and A.requires_grad:
         U, S, Vh = _HardenedSVD.apply(A, eps_F)  # type: ignore[no-untyped-call]
         return U, S, Vh
-    U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+    # want_grad=False (environment-only builds) or eps_F unset: no autograd is in
+    # play here in any configured path (certification always sets kernels.eps_F),
+    # so the scipy fallback's lost differentiability is moot in practice.
+    U, S, Vh = _svd_robust(A)
     ph = _gauge_phase(U)
     return U * ph.conj().unsqueeze(-2), S, Vh * ph.unsqueeze(-1)
 

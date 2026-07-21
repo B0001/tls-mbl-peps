@@ -9,7 +9,7 @@ Crashes lose at most one ladder rung.
 from __future__ import annotations
 
 import dataclasses
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
@@ -256,10 +256,28 @@ def run_ensemble(
             max_workers=cfg.run.workers, mp_context=mp.get_context("spawn")
         ) as pool:
             futures = {pool.submit(run_realization, cfg, k, out): k for k in ks}
-            for fut, k in futures.items():
-                status = fut.result()
+            errors: dict[int, BaseException] = {}
+            # as_completed, not futures.items(): iterating in submission order
+            # blocks on whichever realization happens to be listed first, which
+            # can silently sit on an already-raised exception in another future
+            # for hours before it's ever retrieved (found running the L=8 pilot,
+            # 2026-07-20 -- a crashed worker just idles, `.result()` is what
+            # actually re-raises). as_completed surfaces each result the moment
+            # its worker is done, success or failure.
+            for fut in as_completed(futures):
+                k = futures[fut]
+                try:
+                    status = fut.result()
+                except Exception as exc:  # noqa: BLE001 -- collect, don't abort the batch
+                    errors[k] = exc
+                    status = f"FAILED: {exc}"
                 if progress:
                     progress(k, status)
+            if errors:
+                worst = "; ".join(f"k={k}: {e}" for k, e in sorted(errors.items()))
+                raise RuntimeError(
+                    f"{len(errors)}/{len(ks)} realizations failed: {worst}"
+                )
     return out
 
 
