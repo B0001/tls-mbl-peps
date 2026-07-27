@@ -48,6 +48,18 @@ coefficient errors in §9 prose, corrected in place).
    spectrum decays so fast that a nominally truncating χ becomes effectively exact
    (disc 1e-4 → 2e-15 through optimization). This is the localized-phase spectral-decay
    premise that Stage-B sketching and INV-3 tightness rest on — now an observation.
+3. **The kernel speedup above is *not* a pipeline speedup (measured 2026-07-26).** The
+   33.4× row is the truncation kernel in isolation. In the full row, ADR-010's mandatory
+   exact canonicalization sweep is Θ(χ³D⁸) — a factor D² *above* the Θ(χ³D⁶) truncation
+   that sketching accelerates to Θ(χ³D⁴) — and it is not sketchable. Amdahl therefore caps
+   the row speedup: measured at D=6, χ=36, row 42.1 s exact → 29.5 s sketched (**1.4×**,
+   not 33×). Consequences: (a) D=6 is wall-clock-blocked, not memory-blocked — end-to-end
+   energy+gradient at L=8 measured 2.4 / 14.8 / 182 s for D=2/3/4 (exponent **8.73**),
+   extrapolating D=6 to ~1.7 h *per gradient step*, ~2 orders over the §15 budget;
+   (b) ADR-008's choice to scope the Rust kernel to the **whole row loop** rather than the
+   SVD is retroactively the right call, and is the only path to D=6 at production L;
+   (c) INV-3 fallback measured 25% at D=6 on a product-like state — above the 20%
+   auto-disable, so sketching would switch itself off there anyway.
 
 ## Port-parity contract (Phase 2, torch)
 - Same gates, same thresholds as the table above. Optimizer parity = passing the same

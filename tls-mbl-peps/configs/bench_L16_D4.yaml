@@ -1,9 +1,20 @@
 # Production run, cloud variant of configs/benchmark.yaml.
 # Differences from the §13 acceptance config, both recorded decisions:
-#   - ladder capped at D=4: the D=6 rung needs ADR-007's v1.1 factored operand
-#     (fat-MPS column tensors ~1 GB at L=16, chi=36) -- 1/D extrapolation runs
-#     on rungs {2,3,4}. v1.1 has since landed (env: { factored: true }, ADR-015);
-#     a D=6 ladder needs a new config + wall-clock budget, not just the flag.
+#   - ladder capped at D=4, and STAYS capped: v1.1 factored compression landed
+#     (env.factored, ADR-015) and removed the memory wall, but the measured
+#     wall-clock wall is ~2 orders of magnitude away, so D=6 is not a config
+#     change. Measured 2026-07-26 (L=8, factored, exact backend, 8 threads):
+#     D=2 2.4 s, D=3 14.8 s, D=4 182 s per energy+gradient -> D-exponent 8.73,
+#     extrapolating D=6 to ~1.7 h PER GRADIENT STEP at L=8 (L=16 is 4x the
+#     sites). The §15 gate is < 4 h per realization; LBFGS needs O(1e2) steps.
+#     Sketching does not rescue this: ADR-010's mandatory canonicalization is
+#     Theta(chi^3 D^8), a factor D^2 ABOVE the Theta(chi^3 D^6) truncation the
+#     sketch accelerates, so the kernel's 33x (docs/HANDOFF.md) is Amdahl-capped
+#     to ~1.4x on the full row (measured D=6: 42.1 s -> 29.5 s). Also measured:
+#     INV-3 fallback rate 25% at D=6 on a product-like state, above the 20%
+#     auto-disable. D=6 needs P6 (Rust, ADR-008 scopes the WHOLE row loop --
+#     correctly, since canonicalization not the SVD is the cost) or smaller L.
+#     1/D extrapolation runs on rungs {2,3,4}.
 #   - sdrg disabled: the D4 A/B measurement (docs/ab-report.md) showed Stage A
 #     hurts in this weak-coupling localized regime (PT2 ledger bias).
 run:      { name: bench-L16-D4, master_seed: 20260715, n_realizations: 32, workers: 8, out: runs/bench_L16_D4.zarr }

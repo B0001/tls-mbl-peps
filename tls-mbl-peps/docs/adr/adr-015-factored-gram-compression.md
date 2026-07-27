@@ -55,10 +55,34 @@ this ADR (§0 rule: doc and code fixed together).
 
 ## Consequences
 
+End-to-end validation beyond the unit gate (smoke.yaml, L=4, ladder [2,3], SDRG
+on, 2 realizations, `env.factored` true vs false on the same machine): both
+paths certify, `e_total` agrees to 1.8e-15 / 1.2e-14, q_EA to 1e-11, disc
+weights 1e-20-class vs 1e-23-class (the documented Gram-conditioning floor, 12
+decades under eps_env). Wall clock 43.7 s v1 vs 53.8 s factored -- ~23% slower
+at smoke sizes, since the Gram sweep's overhead only pays for itself once the
+fat tensors dominate (at D=4/chi=16/L=16 the same row is 1.7 s v1 -> 0.7 s
+factored). Both are far inside the 5-minute smoke gate. This crossover is why
+the flag defaults to False: v1 stays the reference and the small-D default.
+
 Measured, single row absorb+compress, exact backend: D=4/chi=16/L=16 peak RSS
 0.86 -> 0.31 GB and 1.7 -> 0.7 s; D=6/chi=36/L=8 runs in 1.17 GB peak where v1's
-fat row alone is ~8 GB before its LQ sweep allocates anything. The D=6 ladder
-rung is now memory-feasible; its wall-clock remains the sketched/Rust phases'
-concern (flop class unchanged by design). If chi^2 D^4 ever becomes the binding
-constraint (D >= 10, §15), that is Phase 7 sharding, not an extension of this
-decision.
+fat row alone is ~8 GB before its LQ sweep allocates anything. If chi^2 D^4 ever
+becomes the binding constraint (D >= 10, §15), that is Phase 7 sharding, not an
+extension of this decision.
+
+**The D=6 rung is now memory-feasible and remains wall-clock-INfeasible**
+(measured 2026-07-26, immediately after this landed — recorded here so the next
+session does not re-derive it or burn a cloud run on it). End-to-end
+energy+gradient at L=8 on this path: D=2 2.4 s, D=3 14.8 s, D=4 182 s
+=> D-exponent 8.73 => D=6 ~1.7 h per gradient step at L=8, with L=16 4x the
+sites and LBFGS needing O(1e2) steps, against a < 4 h/realization §15 gate.
+Sketching cannot close it: the canonicalization this ADR reorganizes is
+Theta(chi^3 D^8) in BOTH v1 and v1.1 (v1: QR of a chi D^2 x chi D^4 operand;
+v1.1: D^2 Gram slices of Theta((chi D^2)^3)), i.e. a factor D^2 above the
+Theta(chi^3 D^6) truncation, and it is not sketchable — so the kernel's measured
+33x becomes 1.4x on a full row (D=6: 42.1 -> 29.5 s). This is a property of
+ADR-010, not a cost introduced here; the flop class is identical to v1 by
+construction. It does, however, retroactively confirm ADR-008's scoping of the
+Rust kernel to the whole row loop rather than the SVD alone: canonicalization,
+not the truncation, is what must get faster for D >= 6.
