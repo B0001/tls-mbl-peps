@@ -7,7 +7,7 @@ set -euo pipefail
 
 GC=/opt/homebrew/share/google-cloud-sdk/bin/gcloud
 PROJECT=tlsmbl-compute
-ZONE=us-central1-a
+ZONE=us-central1-c  # -a/-b were ZONE_RESOURCE_POOL_EXHAUSTED for c2d-standard-8 on 2026-07-22
 VM=tlsmbl-bench
 MACHINE=c2d-standard-8
 CONFIG=configs/bench_L16_D4.yaml

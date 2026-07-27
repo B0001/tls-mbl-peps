@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+import torch.utils.checkpoint as checkpoint
 
 from tlsmbl.core.types import Site
 from tlsmbl.kernels.interface import TruncationBackend
@@ -178,6 +179,55 @@ class BatchedBoundaryMPS:
         )
 
 
+def _batched_row_step(
+    state: PEPSState,
+    y: int,
+    y_from: int,
+    xs_t: torch.Tensor,
+    op: torch.Tensor,
+    chi: int,
+    backend: TruncationBackend,
+    want_grad: bool,
+    orientation: str,  # "top" | "bottom"
+    B: int,
+    cur_tensors: list[torch.Tensor],
+) -> tuple[torch.Tensor, ...]:
+    """One row of §8.4 batched dressing: absorb + compress_batched. This whole
+    step is the unit checkpointed by extend_{top,bottom}_batched (ARCHITECTURE.md
+    §8.5 memory control, applied to the batched dressed-environment path):
+    recomputed in backward instead of keeping its activations live for the
+    whole energy assembly. compress_batched always resolves to ExactSVD, so
+    recompute is bit-identical with no RNG-determinism concerns.
+    """
+    from tlsmbl.kernels.zipup import compress_batched
+
+    L = state.L
+    fat: list[torch.Tensor] = []
+    for x in range(L):
+        plain = double_layer(state.tensors[y][x])
+        m = cur_tensors[x]
+        if orientation == "top":
+            t_plain = torch.einsum("Blvr,avbw->Blawrb", m, plain)
+        else:
+            t_plain = torch.einsum("Blwr,avbw->Blavrb", m, plain)
+        if y == y_from and bool((xs_t == x).any()):
+            dressed = double_layer(state.tensors[y][x], op)
+            if orientation == "top":
+                t_dressed = torch.einsum("Blvr,avbw->Blawrb", m, dressed)
+            else:
+                t_dressed = torch.einsum("Blwr,avbw->Blavrb", m, dressed)
+            mask = (xs_t == x).view(B, 1, 1, 1, 1, 1)
+            t = torch.where(mask, t_dressed, t_plain)
+        else:
+            t = t_plain
+        mid = plain.shape[3] if orientation == "top" else plain.shape[1]
+        fat.append(
+            t.reshape(B, m.shape[1] * plain.shape[0], mid, m.shape[3] * plain.shape[2])
+        )
+    comp, stats = compress_batched(fat, chi, backend, want_grad=want_grad)
+    return (*comp, stats.log_norm)
+
+
 def extend_top_batched(
     state: PEPSState,
     base: BoundaryMPS,
@@ -196,41 +246,22 @@ def extend_top_batched(
     between elements -- and only at each element's own column -- so absorption
     uses the shared plain double layer everywhere and swaps in the single
     shared dressed tensor on the matching (element, column) slots."""
-    from tlsmbl.kernels.zipup import compress_batched
-
     B = len(xs)
-    L = state.L
     xs_t = torch.tensor(xs)
-    cur_tensors = [
-        m.unsqueeze(0).expand(B, *m.shape) for m in base.tensors
-    ]
+    cur_tensors = [m.unsqueeze(0).expand(B, *m.shape) for m in base.tensors]
     cur_log = torch.full((B,), base.log_norm, dtype=torch.float64)
     out: dict[int, BatchedBoundaryMPS] = {}
     for y in range(y_from, y_to):
-        fat: list[torch.Tensor] = []
-        for x in range(L):
-            plain = double_layer(state.tensors[y][x])
-            m = cur_tensors[x]
-            t_plain = torch.einsum("Blvr,avbw->Blawrb", m, plain)
-            if y == y_from and bool((xs_t == x).any()):
-                dressed = double_layer(state.tensors[y][x], op)
-                t_dressed = torch.einsum("Blvr,avbw->Blawrb", m, dressed)
-                mask = (xs_t == x).view(B, 1, 1, 1, 1, 1)
-                t = torch.where(mask, t_dressed, t_plain)
-            else:
-                t = t_plain
-            fat.append(
-                t.reshape(
-                    B,
-                    m.shape[1] * plain.shape[0],
-                    plain.shape[3],
-                    m.shape[3] * plain.shape[2],
-                )
+        args = (state, y, y_from, xs_t, op, chi, backend, want_grad, "top", B)
+        if want_grad:
+            results = checkpoint.checkpoint(
+                _batched_row_step, *args, cur_tensors, use_reentrant=False
             )
-        comp, stats = compress_batched(fat, chi, backend, want_grad=want_grad)
-        cur_tensors = comp
-        cur_log = cur_log + stats.log_norm
-        out[y + 1] = BatchedBoundaryMPS(tensors=comp, log_norm=cur_log)
+        else:
+            results = _batched_row_step(*args, cur_tensors)
+        cur_tensors = list(results[:-1])
+        cur_log = cur_log + results[-1]
+        out[y + 1] = BatchedBoundaryMPS(tensors=cur_tensors, log_norm=cur_log)
     return out
 
 
@@ -248,37 +279,20 @@ def extend_bottom_batched(
 ) -> dict[int, BatchedBoundaryMPS]:
     """Mirror of extend_top_batched: absorb rows y_from down to y_to (level y
     covers rows y..L-1) for all sources in row y_from at columns `xs`."""
-    from tlsmbl.kernels.zipup import compress_batched
-
     B = len(xs)
-    L = state.L
     xs_t = torch.tensor(xs)
     cur_tensors = [m.unsqueeze(0).expand(B, *m.shape) for m in base.tensors]
     cur_log = torch.full((B,), base.log_norm, dtype=torch.float64)
     out: dict[int, BatchedBoundaryMPS] = {}
     for y in range(y_from, y_to - 1, -1):
-        fat: list[torch.Tensor] = []
-        for x in range(L):
-            plain = double_layer(state.tensors[y][x])
-            m = cur_tensors[x]
-            t_plain = torch.einsum("Blwr,avbw->Blavrb", m, plain)
-            if y == y_from and bool((xs_t == x).any()):
-                dressed = double_layer(state.tensors[y][x], op)
-                t_dressed = torch.einsum("Blwr,avbw->Blavrb", m, dressed)
-                mask = (xs_t == x).view(B, 1, 1, 1, 1, 1)
-                t = torch.where(mask, t_dressed, t_plain)
-            else:
-                t = t_plain
-            fat.append(
-                t.reshape(
-                    B,
-                    m.shape[1] * plain.shape[0],
-                    plain.shape[1],
-                    m.shape[3] * plain.shape[2],
-                )
+        args = (state, y, y_from, xs_t, op, chi, backend, want_grad, "bottom", B)
+        if want_grad:
+            results = checkpoint.checkpoint(
+                _batched_row_step, *args, cur_tensors, use_reentrant=False
             )
-        comp, stats = compress_batched(fat, chi, backend, want_grad=want_grad)
-        cur_tensors = comp
-        cur_log = cur_log + stats.log_norm
-        out[y] = BatchedBoundaryMPS(tensors=comp, log_norm=cur_log)
+        else:
+            results = _batched_row_step(*args, cur_tensors)
+        cur_tensors = list(results[:-1])
+        cur_log = cur_log + results[-1]
+        out[y] = BatchedBoundaryMPS(tensors=cur_tensors, log_norm=cur_log)
     return out

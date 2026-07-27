@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+import torch.utils.checkpoint as checkpoint
 
 from tlsmbl.core.guards import finite
 from tlsmbl.core.types import HamiltonianTerms, Site
@@ -135,55 +136,105 @@ def _assemble(
     # Sources sharing a row are batched into one LAPACK-batched compression
     # (exact SVD -- reference backend, always certifiable -- regardless of the
     # sketched setting; batching beats per-call sketching at D <= 4 sizes).
-    span: dict[Site, int] = {}
-    for i, j, _ in terms.pair:
+    #
+    # Built and consumed ONE ROW-GROUP AT A TIME, not precomputed into a dict
+    # spanning the whole lattice: at L=16 with O(1e3) cross-row pairs, holding
+    # every source's dressed chain alive for the whole assembly is what blew up
+    # peak memory past what an 8-worker/32GB cloud VM could handle (found
+    # launching the L=16 production run, 2026-07-23 -- measured 3.4 GB for a
+    # single forward+backward vs 365 MB with cross-row pairs removed). Grouping
+    # by row and consuming each group's contribution immediately lets Python
+    # free it before the next group is built.
+    cross_pairs: dict[Site, list[tuple[Site, Site, float]]] = {}
+    same_row_pairs: list[tuple[Site, Site, float]] = []
+    for i, j, J in terms.pair:
         if i[1] == j[1]:
-            continue
-        if dress == "top":
-            span[i] = max(span.get(i, i[1]), j[1])
+            same_row_pairs.append((i, j, J))
         else:
-            span[j] = min(span.get(j, j[1]), i[1] + 1)
+            src = i if dress == "top" else j
+            cross_pairs.setdefault(src, []).append((i, j, J))
     by_row: dict[int, list[Site]] = {}
-    for s in span:
+    for s in cross_pairs:
         by_row.setdefault(s[1], []).append(s)
-    dressed: dict[Site, dict[int, BoundaryMPS]] = {}
-    for y_src, sources in sorted(by_row.items()):
-        sources = sorted(sources)
-        xs = [s[0] for s in sources]
-        if dress == "top":
-            extent = max(span[s] for s in sources)
-            batch = extend_top_batched(
-                state, tops[y_src], y_src, extent, chi, backend, xs, Z,
-                want_grad=want_grad,
-            )
-        else:
-            extent = min(span[s] for s in sources)
-            batch = extend_bottom_batched(
-                state, bottoms[y_src + 1], y_src, extent, chi, backend, xs, Z,
-                want_grad=want_grad,
-            )
-        for b, s in enumerate(sources):
-            dressed[s] = {lvl: env.element(b) for lvl, env in batch.items()}
 
     E = torch.zeros((), dtype=torch.float64)
     for (x, y), op, c in terms.onsite:
         op_mat = Z if op == "z" else X
         v = rows[y].insert({x: op_mat}) / norms[y]
         E = E + c * v.real
-    for i, j, J in terms.pair:
-        (x1, y1), (x2, y2) = i, j
-        if y1 == y2:
-            v = rows[y1].insert({x1: Z, x2: Z}) / norms[y1]
-        elif dress == "top":
-            # Dressed and undressed environments carry different detached
-            # normalization scales; the ratio needs the constant log-norm offset
-            # restored (it cancels algebraically, so gradients stay exact).
-            rescale = np.exp(dressed[i][y2].log_norm - tops[y2].log_norm)
-            v = rescale * sandwich(dressed[i][y2], state, y2, bottoms[y2 + 1], {x2: Z}) / norms[y2]
-        else:
-            rescale = np.exp(dressed[j][y1 + 1].log_norm - bottoms[y1 + 1].log_norm)
-            v = rescale * sandwich(tops[y1], state, y1, dressed[j][y1 + 1], {x1: Z}) / norms[y1]
+    for i, j, J in same_row_pairs:
+        x1, y1 = i
+        x2, _ = j
+        v = rows[y1].insert({x1: Z, x2: Z}) / norms[y1]
         E = E + J * v.real
+
+    def _row_group_energy(y_src: int, sources: tuple[Site, ...]) -> torch.Tensor:
+        """One row-group's ENTIRE contribution: build its batched dressed
+        environment AND consume it through every partner's sandwich() call.
+        This whole unit -- not just the internal compression step -- is what
+        gets checkpointed below: at L=16 the dominant memory cost turned out
+        to be the O(1e3) per-pair sandwich() activations downstream of the
+        dressed environment, not the environment's own construction (measured
+        2026-07-23: 50 cross-row pairs alone added ~37 MB over baseline,
+        extrapolating to ~1.7 GB+ for the full 2354-pair L=16 lattice --
+        checkpointing only extend_*_batched's internal compress step left
+        this essentially untouched, 3398 -> 3067 MB)."""
+        xs = [s[0] for s in sources]
+        if dress == "top":
+            extent = max(max(j[1] for _, j, _ in cross_pairs[s]) for s in sources)
+            batch = extend_top_batched(
+                state, tops[y_src], y_src, extent, chi, backend, xs, Z,
+                want_grad=want_grad,
+            )
+        else:
+            extent = min(min(i[1] for i, _, _ in cross_pairs[s]) + 1 for s in sources)
+            batch = extend_bottom_batched(
+                state, bottoms[y_src + 1], y_src, extent, chi, backend, xs, Z,
+                want_grad=want_grad,
+            )
+        group_E = torch.zeros((), dtype=torch.float64)
+        for b, s in enumerate(sources):
+            dressed_s = {lvl: env.element(b) for lvl, env in batch.items()}
+            # Group this source's partners by their OWN row: a raw sandwich()
+            # per partner does a full O(L) contraction from scratch every
+            # time, so a source with several partners on the same row paid
+            # for that row's chain repeatedly -- the actual dominant cost at
+            # L=16 (measured: 50 cross-row pairs alone added ~37 MB / a
+            # proportional time cost over baseline). RowSplice amortizes the
+            # O(L) prefix/suffix build once per (source, partner-row) and
+            # each additional same-row partner costs O(1).
+            by_partner_row: dict[int, list[tuple[Site, Site, float]]] = {}
+            for i, j, J in cross_pairs[s]:
+                key_row = j[1] if dress == "top" else i[1]
+                by_partner_row.setdefault(key_row, []).append((i, j, J))
+            for y2, pairs_here in by_partner_row.items():
+                if dress == "top":
+                    # Dressed and undressed environments carry different
+                    # detached normalization scales; the ratio needs the
+                    # constant log-norm offset restored (cancels
+                    # algebraically, so gradients stay exact).
+                    rescale = np.exp(dressed_s[y2].log_norm - tops[y2].log_norm)
+                    splice = RowSplice(dressed_s[y2], state, y2, bottoms[y2 + 1])
+                    for _, j, J in pairs_here:
+                        v = rescale * splice.insert({j[0]: Z}) / norms[y2]
+                        group_E = group_E + J * v.real
+                else:
+                    y1 = y2
+                    rescale = np.exp(dressed_s[y1 + 1].log_norm - bottoms[y1 + 1].log_norm)
+                    splice = RowSplice(tops[y1], state, y1, dressed_s[y1 + 1])
+                    for i, _, J in pairs_here:
+                        v = rescale * splice.insert({i[0]: Z}) / norms[y1]
+                        group_E = group_E + J * v.real
+        return group_E
+
+    for y_src, sources in sorted(by_row.items()):
+        sources_t = tuple(sorted(sources))
+        if want_grad:
+            E = E + checkpoint.checkpoint(
+                _row_group_energy, y_src, sources_t, use_reentrant=False
+            )
+        else:
+            E = E + _row_group_energy(y_src, sources_t)
     return E, row_consistency
 
 
