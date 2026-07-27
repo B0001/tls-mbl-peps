@@ -36,12 +36,23 @@ class StaticObservables:
 class _Measurer:
     """Caches undressed environments and dressed tops per (site, op)."""
 
-    def __init__(self, state: PEPSState, chi: int, backend: TruncationBackend) -> None:
+    def __init__(
+        self,
+        state: PEPSState,
+        chi: int,
+        backend: TruncationBackend,
+        factored: bool = False,
+    ) -> None:
         self.state = state
         self.chi = chi
         self.backend = backend
-        self.tops, _ = build_tops(state, chi, backend, want_grad=False)
-        self.bottoms, _ = build_bottoms(state, chi, backend, want_grad=False)
+        self.factored = factored
+        self.tops, _ = build_tops(
+            state, chi, backend, want_grad=False, factored=factored
+        )
+        self.bottoms, _ = build_bottoms(
+            state, chi, backend, want_grad=False, factored=factored
+        )
         self.norms = [
             sandwich(self.tops[y], state, y, self.bottoms[y + 1])
             for y in range(state.L)
@@ -65,7 +76,7 @@ class _Measurer:
         if key not in self._dressed:
             tops, _ = build_tops(
                 self.state, self.chi, self.backend, want_grad=False,
-                insert={site: _OPS[kind]},
+                insert={site: _OPS[kind]}, factored=self.factored,
             )
             self._dressed[key] = tops
         return self._dressed[key]
@@ -109,9 +120,11 @@ def measure_static(
     chi: int,
     backend: TruncationBackend,
     circuit: SDRGCircuit | None,
+    *,
+    factored: bool = False,
 ) -> StaticObservables:
     L = state.L
-    m = _Measurer(state, chi, backend)
+    m = _Measurer(state, chi, backend, factored=factored)
 
     def push(site: Site) -> list[tuple[Site, str, float]]:
         if circuit is None:

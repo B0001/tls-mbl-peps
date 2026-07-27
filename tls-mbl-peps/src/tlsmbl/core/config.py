@@ -65,6 +65,11 @@ class EnvConfig(StrictModel):
     checkpoint_rows: bool = True
     retry_max: int = Field(default=3, ge=0)
     dchi: str | int = "auto"
+    # ADR-007 v1.1 / ADR-015: compress from the factored (M, a) representation,
+    # never materializing Theta(chi^2 D^6) fat tensors. The D >= 6 ladder rungs
+    # require this; default off pending nothing -- it is equivalence-tested and
+    # strictly lighter, but v1 remains the reference path.
+    factored: bool = False
 
 
 class KernelsConfig(StrictModel):

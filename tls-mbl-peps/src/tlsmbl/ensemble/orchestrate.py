@@ -154,6 +154,7 @@ def run_realization(
             eps_env=cfg.env.eps_env,
             eps_env_E=cfg.env.eps_env_E,
             retry_max=cfg.env.retry_max,
+            factored=cfg.env.factored,
         )
         state = res.state
         store.write_rung(
@@ -184,6 +185,7 @@ def run_realization(
         eps_env=cfg.env.eps_env,
         eps_env_E=cfg.env.eps_env_E,
         tail_bound=tb,
+        factored=cfg.env.factored,
     )
     report = chi_extrapolation_check(
         state,
@@ -193,13 +195,16 @@ def run_realization(
         tau_chi=cfg.invariants.tau_chi,
         eps_env=cfg.env.eps_env,
         eps_env_E=cfg.env.eps_env_E,
+        factored=cfg.env.factored,
     )
     e_total = report.e_total + e_offset
     inv5_ok = tail_certified(
         cfg.model.g_J, cfg.model.R_c, e_total / cfg.model.L**2, cfg.invariants.tau_tail
     )
     report = dataclasses.replace(report, certified=report.certified and inv5_ok)
-    obs = measure_static(state, real, chi, backend, circuit)
+    obs = measure_static(
+        state, real, chi, backend, circuit, factored=cfg.env.factored
+    )
     store.write_final(
         g,
         {

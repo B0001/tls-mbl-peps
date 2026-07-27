@@ -115,12 +115,15 @@ def _assemble(
     *,
     want_grad: bool,
     dress: str,  # "top" | "bottom"
+    factored: bool = False,
 ) -> tuple[torch.Tensor, float]:
     """Differentiable energy; returns (E, row_consistency). Cross-row pairs dressed
     per `dress` direction (the two directions form INV-1's up/down certificate)."""
     L = state.L
-    tops, _ = build_tops(state, chi, backend, want_grad=want_grad)
-    bottoms, _ = build_bottoms(state, chi, backend, want_grad=want_grad)
+    tops, _ = build_tops(state, chi, backend, want_grad=want_grad, factored=factored)
+    bottoms, _ = build_bottoms(
+        state, chi, backend, want_grad=want_grad, factored=factored
+    )
     rows = [RowSplice(tops[y], state, y, bottoms[y + 1]) for y in range(L)]
     norms = [rows[y].norm for y in range(L)]
     with torch.no_grad():
@@ -184,13 +187,13 @@ def _assemble(
             extent = max(max(j[1] for _, j, _ in cross_pairs[s]) for s in sources)
             batch = extend_top_batched(
                 state, tops[y_src], y_src, extent, chi, backend, xs, Z,
-                want_grad=want_grad,
+                want_grad=want_grad, factored=factored,
             )
         else:
             extent = min(min(i[1] for i, _, _ in cross_pairs[s]) + 1 for s in sources)
             batch = extend_bottom_batched(
                 state, bottoms[y_src + 1], y_src, extent, chi, backend, xs, Z,
-                want_grad=want_grad,
+                want_grad=want_grad, factored=factored,
             )
         group_E = torch.zeros((), dtype=torch.float64)
         for b, s in enumerate(sources):
@@ -239,10 +242,17 @@ def _assemble(
 
 
 def energy_differentiable(
-    state: PEPSState, terms: HamiltonianTerms, chi: int, backend: TruncationBackend
+    state: PEPSState,
+    terms: HamiltonianTerms,
+    chi: int,
+    backend: TruncationBackend,
+    *,
+    factored: bool = False,
 ) -> torch.Tensor:
     """The AD-graph energy (top-dressed direction). LBFGS closes over this."""
-    E, _ = _assemble(state, terms, chi, backend, want_grad=True, dress="top")
+    E, _ = _assemble(
+        state, terms, chi, backend, want_grad=True, dress="top", factored=factored
+    )
     return E
 
 
@@ -293,17 +303,24 @@ def energy_certified(
     grad_norm: float = float("nan"),
     n_iters: int = 0,
     wall_s: float = 0.0,
+    factored: bool = False,
 ) -> EnergyReport:
     """Runs the INV-1 gates and mints the report, or raises EnvironmentNotConverged."""
-    env = build_env(state, chi, backend, want_grad=False)
+    env = build_env(state, chi, backend, want_grad=False, factored=factored)
     max_disc = max(env.disc_weights)
     if max_disc > eps_env:
         raise EnvironmentNotConverged(
             f"INV-1: max discarded weight {max_disc:.3e} > eps_env {eps_env:.1e} at chi={chi}"
         )
     with torch.no_grad():
-        E_down, row_c = _assemble(state, terms, chi, backend, want_grad=False, dress="top")
-        E_up, _ = _assemble(state, terms, chi, backend, want_grad=False, dress="bottom")
+        E_down, row_c = _assemble(
+            state, terms, chi, backend, want_grad=False, dress="top",
+            factored=factored,
+        )
+        E_up, _ = _assemble(
+            state, terms, chi, backend, want_grad=False, dress="bottom",
+            factored=factored,
+        )
     gap = abs(float(E_down) - float(E_up))
     if gap > eps_env_E:
         raise EnvironmentNotConverged(

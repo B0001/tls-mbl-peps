@@ -2,7 +2,8 @@
 # Differences from the §13 acceptance config, both recorded decisions:
 #   - ladder capped at D=4: the D=6 rung needs ADR-007's v1.1 factored operand
 #     (fat-MPS column tensors ~1 GB at L=16, chi=36) -- 1/D extrapolation runs
-#     on rungs {2,3,4}.
+#     on rungs {2,3,4}. v1.1 has since landed (env: { factored: true }, ADR-015);
+#     a D=6 ladder needs a new config + wall-clock budget, not just the flag.
 #   - sdrg disabled: the D4 A/B measurement (docs/ab-report.md) showed Stage A
 #     hurts in this weak-coupling localized regime (PT2 ledger bias).
 run:      { name: bench-L16-D4, master_seed: 20260715, n_realizations: 32, workers: 8, out: runs/bench_L16_D4.zarr }

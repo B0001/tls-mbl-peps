@@ -76,6 +76,7 @@ def optimize_lbfgs(
     eps_env_E: float = 1e-7,
     dchi: int | None = None,
     retry_max: int = 3,
+    factored: bool = False,
 ) -> OptResult:
     N = state.L**2
     g_stop = tol_g_scale * (2 * N * state.D**4 * state.d) ** 0.5
@@ -86,7 +87,8 @@ def optimize_lbfgs(
             # Arm the INV-1 gates once up front at this chi: refuse to optimize in
             # an uncertifiable environment rather than discover it at the end.
             energy_certified(
-                state, terms, chi, backend, eps_env=eps_env, eps_env_E=eps_env_E
+                state, terms, chi, backend, eps_env=eps_env, eps_env_E=eps_env_E,
+                factored=factored,
             )
             break
         except EnvironmentNotConverged:
@@ -105,7 +107,9 @@ def optimize_lbfgs(
     def closure() -> torch.Tensor:
         opt.zero_grad()
         try:
-            E = energy_differentiable(_rebuild(state, leaves), terms, chi, backend)
+            E = energy_differentiable(
+                _rebuild(state, leaves), terms, chi, backend, factored=factored
+            )
             E.backward()  # type: ignore[no-untyped-call]
         except (RuntimeError, ValueError) as exc:
             warnings.warn(

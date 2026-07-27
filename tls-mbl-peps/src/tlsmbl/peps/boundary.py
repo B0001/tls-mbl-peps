@@ -13,10 +13,19 @@ import torch
 import torch.utils.checkpoint as checkpoint
 
 from tlsmbl.core.types import Site
+from tlsmbl.kernels.factored import compress_factored
 from tlsmbl.kernels.interface import TruncationBackend
 from tlsmbl.kernels.zipup import compress
 from tlsmbl.peps.doublelayer import double_layer
 from tlsmbl.peps.state import PEPSState
+
+
+def _flip_a(a: torch.Tensor) -> torch.Tensor:
+    """Top<->bottom absorption convention for the factored path: swap the double
+    layer's up/down legs ((..., al, u, be, d) -> (..., al, d, be, u)) so bottom
+    absorption is top absorption of the flipped tensor (kernels/factored.py
+    works in top convention only). Batch-aware."""
+    return a.transpose(-3, -1)
 
 
 @dataclass
@@ -75,14 +84,21 @@ def build_tops(
     *,
     want_grad: bool,
     insert: dict[Site, torch.Tensor] | None = None,
+    factored: bool = False,
 ) -> tuple[list[BoundaryMPS], list[float]]:
     L = state.L
     dtype = state.tensors[0][0].dtype
     tops = [trivial_mps(L, dtype)]
     discs: list[float] = []
     for y in range(L):
-        fat = absorb_row_top(tops[-1], _row(state, y, insert))
-        t, stats = compress(fat, chi, backend, want_grad=want_grad)
+        row = _row(state, y, insert)
+        if factored:
+            t, stats = compress_factored(
+                tops[-1].tensors, row, chi, backend, want_grad=want_grad
+            )
+        else:
+            fat = absorb_row_top(tops[-1], row)
+            t, stats = compress(fat, chi, backend, want_grad=want_grad)
         tops.append(BoundaryMPS(t, tops[-1].log_norm + stats.log_norm))
         discs.extend(stats.disc_weights)
     return tops, discs
@@ -95,24 +111,42 @@ def build_bottoms(
     *,
     want_grad: bool,
     insert: dict[Site, torch.Tensor] | None = None,
+    factored: bool = False,
 ) -> tuple[list[BoundaryMPS], list[float]]:
     L = state.L
     dtype = state.tensors[0][0].dtype
     reversed_bottoms = [trivial_mps(L, dtype)]  # index r holds rows (L-r)..L-1
     discs: list[float] = []
     for y in range(L - 1, -1, -1):
-        fat = absorb_row_bottom(reversed_bottoms[-1], _row(state, y, insert))
-        b, stats = compress(fat, chi, backend, want_grad=want_grad)
+        row = _row(state, y, insert)
+        if factored:
+            b, stats = compress_factored(
+                reversed_bottoms[-1].tensors,
+                [_flip_a(a) for a in row],
+                chi,
+                backend,
+                want_grad=want_grad,
+            )
+        else:
+            fat = absorb_row_bottom(reversed_bottoms[-1], row)
+            b, stats = compress(fat, chi, backend, want_grad=want_grad)
         reversed_bottoms.append(BoundaryMPS(b, reversed_bottoms[-1].log_norm + stats.log_norm))
         discs.extend(stats.disc_weights)
     return list(reversed(reversed_bottoms)), discs
 
 
 def build_env(
-    state: PEPSState, chi: int, backend: TruncationBackend, *, want_grad: bool
+    state: PEPSState,
+    chi: int,
+    backend: TruncationBackend,
+    *,
+    want_grad: bool,
+    factored: bool = False,
 ) -> EnvBundle:
-    tops, d1 = build_tops(state, chi, backend, want_grad=want_grad)
-    bottoms, d2 = build_bottoms(state, chi, backend, want_grad=want_grad)
+    tops, d1 = build_tops(state, chi, backend, want_grad=want_grad, factored=factored)
+    bottoms, d2 = build_bottoms(
+        state, chi, backend, want_grad=want_grad, factored=factored
+    )
     return EnvBundle(tops=tops, bottoms=bottoms, chi=chi, disc_weights=d1 + d2)
 
 
@@ -126,6 +160,7 @@ def extend_top(
     *,
     want_grad: bool,
     insert: dict[Site, torch.Tensor] | None = None,
+    factored: bool = False,
 ) -> dict[int, BoundaryMPS]:
     """§8.4 incremental dressing: absorb rows y_from..y_to-1 into `base`
     (= an existing tops[y_from]), returning the environment at each level
@@ -135,8 +170,14 @@ def extend_top(
     out: dict[int, BoundaryMPS] = {}
     cur = base
     for y in range(y_from, y_to):
-        fat = absorb_row_top(cur, _row(state, y, insert))
-        t, stats = compress(fat, chi, backend, want_grad=want_grad)
+        row = _row(state, y, insert)
+        if factored:
+            t, stats = compress_factored(
+                cur.tensors, row, chi, backend, want_grad=want_grad
+            )
+        else:
+            fat = absorb_row_top(cur, row)
+            t, stats = compress(fat, chi, backend, want_grad=want_grad)
         cur = BoundaryMPS(t, cur.log_norm + stats.log_norm)
         out[y + 1] = cur
     return out
@@ -152,6 +193,7 @@ def extend_bottom(
     *,
     want_grad: bool,
     insert: dict[Site, torch.Tensor] | None = None,
+    factored: bool = False,
 ) -> dict[int, BoundaryMPS]:
     """Mirror of extend_top: absorb rows y_from down to y_to into `base`
     (= an existing bottoms[y_from + 1]), returning bottoms-style environments
@@ -159,8 +201,15 @@ def extend_bottom(
     out: dict[int, BoundaryMPS] = {}
     cur = base
     for y in range(y_from, y_to - 1, -1):
-        fat = absorb_row_bottom(cur, _row(state, y, insert))
-        b, stats = compress(fat, chi, backend, want_grad=want_grad)
+        row = _row(state, y, insert)
+        if factored:
+            b, stats = compress_factored(
+                cur.tensors, [_flip_a(a) for a in row], chi, backend,
+                want_grad=want_grad,
+            )
+        else:
+            fat = absorb_row_bottom(cur, row)
+            b, stats = compress(fat, chi, backend, want_grad=want_grad)
         cur = BoundaryMPS(b, cur.log_norm + stats.log_norm)
         out[y] = cur
     return out
@@ -190,6 +239,7 @@ def _batched_row_step(
     want_grad: bool,
     orientation: str,  # "top" | "bottom"
     B: int,
+    factored: bool,
     cur_tensors: list[torch.Tensor],
 ) -> tuple[torch.Tensor, ...]:
     """One row of §8.4 batched dressing: absorb + compress_batched. This whole
@@ -198,10 +248,31 @@ def _batched_row_step(
     recomputed in backward instead of keeping its activations live for the
     whole energy assembly. compress_batched always resolves to ExactSVD, so
     recompute is bit-identical with no RNG-determinism concerns.
+
+    With `factored` (ADR-015) the batched fat tensors -- B x Theta(chi^2 D^6),
+    the worst allocations in the whole solver -- are never formed: the per-site
+    (M, a) pairs go straight to compress_factored_batched, with the per-element
+    dressing swapped in on the D^8-sized double layer instead of the fat tensor.
     """
+    from tlsmbl.kernels.factored import compress_factored_batched
     from tlsmbl.kernels.zipup import compress_batched
 
     L = state.L
+    if factored:
+        As: list[torch.Tensor] = []
+        for x in range(L):
+            plain = double_layer(state.tensors[y][x])
+            if y == y_from and bool((xs_t == x).any()):
+                dressed = double_layer(state.tensors[y][x], op)
+                mask = (xs_t == x).view(B, 1, 1, 1, 1)
+                a_x = torch.where(mask, dressed.unsqueeze(0), plain.unsqueeze(0))
+            else:
+                a_x = plain.unsqueeze(0).expand(B, *plain.shape)
+            As.append(a_x if orientation == "top" else _flip_a(a_x))
+        comp, fstats = compress_factored_batched(
+            list(cur_tensors), As, chi, backend, want_grad=want_grad
+        )
+        return (*comp, fstats.log_norm)
     fat: list[torch.Tensor] = []
     for x in range(L):
         plain = double_layer(state.tensors[y][x])
@@ -239,6 +310,7 @@ def extend_top_batched(
     op: torch.Tensor,
     *,
     want_grad: bool,
+    factored: bool = False,
 ) -> dict[int, BatchedBoundaryMPS]:
     """Batched §8.4 dressing for all sources in row y_from at columns `xs`,
     sharing the undressed base: one batch element per source, absorbed and
@@ -252,7 +324,9 @@ def extend_top_batched(
     cur_log = torch.full((B,), base.log_norm, dtype=torch.float64)
     out: dict[int, BatchedBoundaryMPS] = {}
     for y in range(y_from, y_to):
-        args = (state, y, y_from, xs_t, op, chi, backend, want_grad, "top", B)
+        args = (
+            state, y, y_from, xs_t, op, chi, backend, want_grad, "top", B, factored,
+        )
         if want_grad:
             results = checkpoint.checkpoint(
                 _batched_row_step, *args, cur_tensors, use_reentrant=False
@@ -276,6 +350,7 @@ def extend_bottom_batched(
     op: torch.Tensor,
     *,
     want_grad: bool,
+    factored: bool = False,
 ) -> dict[int, BatchedBoundaryMPS]:
     """Mirror of extend_top_batched: absorb rows y_from down to y_to (level y
     covers rows y..L-1) for all sources in row y_from at columns `xs`."""
@@ -285,7 +360,9 @@ def extend_bottom_batched(
     cur_log = torch.full((B,), base.log_norm, dtype=torch.float64)
     out: dict[int, BatchedBoundaryMPS] = {}
     for y in range(y_from, y_to - 1, -1):
-        args = (state, y, y_from, xs_t, op, chi, backend, want_grad, "bottom", B)
+        args = (
+            state, y, y_from, xs_t, op, chi, backend, want_grad, "bottom", B, factored,
+        )
         if want_grad:
             results = checkpoint.checkpoint(
                 _batched_row_step, *args, cur_tensors, use_reentrant=False

@@ -33,7 +33,7 @@ If `make verify` fails: **stop and fix the environment.** Never touch a toleranc
 - `prototypes/` is a **reference oracle, not production code**. Never import it from
   `src/`. Production must reproduce its numbers through `tests/golden/`.
 - Anything underspecified: pick the simplest invariant-consistent option, record an ADR
-  in `docs/adr/` (next number: **ADR-014**), continue. Do not stall.
+  in `docs/adr/` (next number: **ADR-016**), continue. Do not stall.
 
 ## Executed ADRs — do not re-litigate (each records a defect found by running code)
 | ADR | Operational consequence for you |
@@ -43,6 +43,7 @@ If `make verify` fails: **stop and fix the environment.** Never touch a toleranc
 | 011 | Canonicalization **inside the AD graph** uses full-rank SVD, not QR/LQ: torch and JAX QR-VJPs reject wide matrices, and the right-edge operand is wide. |
 | 012 | Truncation gradient = full economy SVD + slice — exact for the compression graph (outputs recombine bilinearly), including kept↔discarded coupling. The projector formula is the *sketched-backend fallback only*. |
 | 013 | SDRG PT₂ coefficients: use §9's **current** formulas (original prose had two factor-2 errors). `sdrg_3site.py` Tier-I identity is the arbiter for any change. |
+| 015 | Factored compression (`env.factored`, needed for D≥6) = bond-Gram canonicalization, NOT the original uncanonicalized LinearOp sketch (that violates ADR-010). Equivalence gate: `tests/unit/test_factored_compress.py`. |
 
 ## Status → task queue
 **DONE, validated in prototypes (math framework-portable):** kernel scaling + INV-3 gate

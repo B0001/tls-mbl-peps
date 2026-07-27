@@ -25,12 +25,14 @@ def chi_extrapolation_check(
     tau_chi: float,
     eps_env: float,
     eps_env_E: float,
+    factored: bool = False,
 ) -> EnergyReport:
     """Returns the report with chi_stability stamped; certified goes False if the
     stability gate fails (INV-2 failure action, not an exception)."""
     chi = report.env.chi
     report_2chi = energy_certified(
-        state, terms, 2 * chi, backend, eps_env=eps_env, eps_env_E=eps_env_E
+        state, terms, 2 * chi, backend, eps_env=eps_env, eps_env_E=eps_env_E,
+        factored=factored,
     )
     gap = abs(report.e_total - report_2chi.e_total)
     return dataclasses.replace(
