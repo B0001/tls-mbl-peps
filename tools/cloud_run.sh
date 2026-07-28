@@ -21,14 +21,17 @@ create)
     --boot-disk-size=30GB
   ;;
 ship)
-  tar -C "$REPO_DIR/.." --exclude='.venv' --exclude='runs' --exclude='__pycache__' \
-      --exclude='.pytest_cache' --exclude='*.egg-info' -czf /tmp/tlsmbl.tgz tls-mbl-peps
+  # Tar the repo *contents* (not the directory) and unpack into a fixed remote name,
+  # so this works regardless of what the local checkout directory is called.
+  tar -C "$REPO_DIR" --exclude='./.git' --exclude='./.venv' --exclude='./runs' \
+      --exclude='__pycache__' --exclude='.pytest_cache' --exclude='*.egg-info' \
+      -czf /tmp/tlsmbl.tgz .
   $GC compute scp /tmp/tlsmbl.tgz $VM:~ --project=$PROJECT --zone=$ZONE
   $GC compute ssh $VM --project=$PROJECT --zone=$ZONE --command='
     set -e
     sudo apt-get -qq update && sudo apt-get -qq install -y python3-pip curl git
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    tar xzf tlsmbl.tgz
+    mkdir -p tls-mbl-peps && tar xzf tlsmbl.tgz -C tls-mbl-peps
     cd tls-mbl-peps
     ~/.local/bin/uv venv --python 3.12 .venv
     ~/.local/bin/uv pip install -e ".[dev]" --python .venv/bin/python

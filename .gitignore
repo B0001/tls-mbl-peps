@@ -6,4 +6,6 @@ runs/
 .venv/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.benchmarks/
 .DS_Store
