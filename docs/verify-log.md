@@ -38,6 +38,43 @@ P0-P5 implemented and committed phase-by-phase (see git log). Final state:
 ruff + mypy --strict clean. `make verify` / `make verify-jax` (prototype tier)
 unchanged and green.
 
+## Python 3.14 migration + repo-root promotion (2026-07-28)
+
+The project moved out of the `tls-mbl-peps/` subdirectory to the repo root, and the
+interpreter moved 3.12.0 -> 3.14.6. Re-ran every gate at the new root on standard
+(GIL) CPython 3.14.6, torch 2.13.0 CPU, jax 0.11.0, quimb 1.14.0, numpy 2.4.6:
+
+```
+uv run pytest tests            -> 138 passed, 2 skipped
+make verify                    -> ALL PASS (51/51), ALL PASS (9/9)
+make verify-jax                -> consistency D=2 2.032e-15,  D=3 2.218e-14
+                                  T-AD-FD chi=4 (disc=0)       1.337e-09
+                                  T-AD-FD chi=2 (disc=1.93e-2) 4.763e-09
+uv run mypy                    -> Success: no issues found in 46 source files
+uv run ruff check .            -> All checks passed!
+tlsmbl run configs/smoke.yaml  -> 42 s, both realizations certified (disc <= 1.2e-22)
+tlsmbl verify runs/smoke.zarr  -> clean
+```
+
+The jax-tier numbers are **bit-identical** to the 3.12 run recorded above, so the
+interpreter bump moved no numerics.
+
+**3.14 is the ceiling.** torch 2.13.0 publishes `cp310`-`cp314` wheels only; 3.15 has
+none. `requires-python` is now `>=3.11,<3.15` so this fails at resolve time with a clear
+message instead of at `import torch`. Free-threaded 3.14 has a `cp314t` torch wheel and
+the suite does pass on it, but certification runs are not validated there — use a
+standard build.
+
+**Two environment defects fixed while re-verifying:**
+- The tracked `uv.lock` pinned numba 0.53.1 (via quimb), which cannot build on Python
+  >=3.10, so `uv sync --extra dev` failed outright. Regenerated: numba is now 0.66.0 and
+  `uv sync --extra dev` works.
+- `ruff` is unpinned in the dev extra and its *default* rule set has widened across
+  releases; under 0.16.0 the previously-clean tree reported 53 findings, so "ruff clean"
+  had quietly stopped being reproducible. `[tool.ruff.lint] select` is now explicit and
+  `prototypes/` is excluded. None of the findings were real bugs — see the pyproject
+  comments for the audit (B008 is the typer idiom; B023/F821 are same-iteration lambdas).
+
 ## Smoke budget gate (2026-07-19)
 
 `tlsmbl run configs/smoke.yaml` end-to-end on an 8-core/16GB M-series laptop:

@@ -42,6 +42,13 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# prototypes/ is a frozen reference oracle (CLAUDE.md), not production code: compressed
+# style is deliberate (E702 semicolons, E402 late imports, E741 `l`), and reformatting it
+# risks perturbing numbers that golden tests pin. Audited before excluding -- the only
+# alarming findings are two F821 `W` in bench_kernel.py, correct in principle (a `del W`
+# at line 119 frees the n-by-n operand between D points) but benign, since `_time` calls
+# the lambda before the del.
+extend-exclude = ["prototypes"]
 
 [tool.ruff.lint]
 # Pinned explicitly rather than relying on ruff's default select. `ruff` floats in the
