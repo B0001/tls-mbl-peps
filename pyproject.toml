@@ -2,7 +2,17 @@
 name = "tlsmbl"
 version = "0.0.1"
 description = "Variational PEPS solver for TLS many-body localization with certified energy reporting"
-requires-python = ">=3.11"
+authors = [{ name = "Benjamin James Hess", email = "hess.bn@gmail.com" }]
+# Not an SPDX-listed license, so PEP 639 requires the LicenseRef- form.
+# The Big Time License's "How to Request" clause looks for the licensor's address in
+# "documentation, software package metadata, or an about screen" -- the author email
+# above is that address, and it is repeated in LICENSE.md and README.md.
+license = "LicenseRef-BigTimePublicLicense-2.0.0"
+license-files = ["LICENSE.md"]
+requires-python = ">=3.11,<3.15"
+# Upper bound is torch's ABI ceiling, not a guess: torch 2.13.0 publishes cp310..cp314
+# only, so 3.15 has no wheel at all. Bounding it here makes that fail at resolve time
+# with a clear message instead of at `import torch`.
 dependencies = ["numpy", "scipy", "zarr", "numcodecs", "pydantic>=2", "typer", "pyyaml"]
 
 [project.optional-dependencies]
@@ -16,7 +26,8 @@ dev = ["pytest", "pytest-benchmark", "hypothesis", "ruff", "mypy", "quimb", "num
 tlsmbl = "tlsmbl.cli:app"
 
 [build-system]
-requires = ["setuptools>=68"]
+# >=77 for PEP 639 `license` / `license-files` support.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -31,6 +42,18 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Pinned explicitly rather than relying on ruff's default select. `ruff` floats in the
+# dev extra, and its default rule set has grown across releases -- under 0.16.0 the
+# previously-clean tree reports 30 findings, so "ruff clean" silently stopped being a
+# reproducible statement. This is the set the codebase is actually validated against.
+# Reviewed under 0.16.0's wider defaults: the extra findings are style (I001, UP037,
+# RUF059, PLR0402, ISC004) or false positives -- B008 is the standard typer idiom, and
+# the B023 hits in kernels/bench.py are lambdas consumed by `_median_time` within the
+# same iteration, so late binding never manifests. Widening this set is a style choice,
+# not a bug fix.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.12"

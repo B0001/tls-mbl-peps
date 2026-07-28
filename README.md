@@ -24,9 +24,15 @@ A number that reaches you has already proven it earned the right to exist.
 ## Quickstart
 
 ```bash
-uv sync                                                    # Python ≥3.11
+uv sync --extra dev    # Python 3.11–3.14; .python-version pins 3.14
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+uv pip install jax     # optional, tier-2 prototype parity only
 ```
+
+> Python 3.15 is deliberately excluded: torch 2.13.0 publishes `cp310`–`cp314` wheels only.
+> `requires-python` caps it so this fails at resolve time rather than at `import torch`.
+> Use a standard CPython build — the free-threaded (no-GIL) 3.14 has a torch wheel and the
+> suite does pass on it, but it is not what the certification runs are validated against.
 
 > Do **not** plain `pip install torch` — the default PyPI Linux wheel is CUDA-linked and
 > fails on CPU-only hosts (missing `libcublasLt`, observed in prototyping).
@@ -109,5 +115,10 @@ Full table in [`docs/HANDOFF.md`](docs/HANDOFF.md).
 
 ## License
 
-[Big Time Public License 2.0.0](LICENSE.md) — free for noncommercial use and small business;
-big businesses need a commercial license on fair, reasonable, and nondiscriminatory terms.
+Copyright 2026 Benjamin James Hess. Released under the
+[Big Time Public License 2.0.0](LICENSE.md): free for noncommercial use, for noncommercial
+organizations, and for small business (under 20 people, under $1M revenue, under $1M
+investment); larger companies need a commercial license, available on fair, reasonable, and
+nondiscriminatory terms.
+
+**Commercial licensing:** <hess.bn@gmail.com>.

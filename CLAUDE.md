@@ -11,17 +11,24 @@ truncation, and certified-by-construction energy reporting.
 3. The Gotchas section below.
 
 ## Step 0 — environment gate (always, before anything else)
+**Everything goes through `uv`.** Never `pip install`, never `source .venv/bin/activate`.
 ```
-python3.11+;  pip install -e ".[dev]"
+uv sync --extra dev                 # Python 3.11-3.14; .python-version pins 3.14
 # torch (needed from Phase 2):
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-#   Do NOT plain `pip install torch`: the default PyPI linux wheel is CUDA-linked
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   Do NOT install torch from default PyPI: that linux wheel is CUDA-linked
 #   (observed failure in prototyping: missing libcublasLt on CPU-only hosts).
-# jax (optional, tier-2 prototype parity only):  pip install jax
+# jax (optional, tier-2 prototype parity only):  uv pip install jax
 make verify        # tier-1 baselines: must show "ALL PASS (51/51)", "ALL PASS (9/9)"
 make verify-jax    # if jax present: consistency ~1e-15; T-AD-FD ≤1e-6 at χ=4 AND χ=2
+uv run pytest tests   # production suite: 138 passed, 2 skipped
 ```
 If `make verify` fails: **stop and fix the environment.** Never touch a tolerance to pass.
+
+**Python ceiling is 3.14, and it is a hard one:** torch 2.13.0 publishes `cp310`–`cp314`
+wheels only, so 3.15 cannot work. `requires-python = ">=3.11,<3.15"` makes that fail at
+resolve time. Use a standard CPython build, not free-threaded: the suite does pass on
+no-GIL 3.14, but certification runs are not validated there.
 
 ## Non-negotiables (distilled; full text in ARCHITECTURE.md §0/§3)
 - Phase order (§16). Phase N+1 does not start before Phase N's exit tests are green in CI.
