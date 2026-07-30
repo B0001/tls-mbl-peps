@@ -29,6 +29,7 @@ from tlsmbl.kernels.svd import ExactSVD
 from tlsmbl.model.hamiltonian import build_terms
 from tlsmbl.model.hartree import tail_bound, tail_certified
 from tlsmbl.model.sampling import sample_realization
+from tlsmbl.observables.decoherence import inputs_from_config, tier2_record
 from tlsmbl.observables.static import measure_static
 from tlsmbl.optimize.finalize import chi_extrapolation_check
 from tlsmbl.optimize.init import product_init
@@ -209,6 +210,19 @@ def run_realization(
     obs = measure_static(
         state, real, chi, backend, circuit, factored=cfg.env.factored
     )
+    # Tier-2 (§12), default off. Built from the *physical-frame* realization and the
+    # measured local polarization, so the transverse weights come from the certified
+    # state rather than the bare fields. A bad declared input raises rather than
+    # silently emitting a Tier-2 number (see inputs_from_config).
+    tier2: dict[str, object] | None = None
+    if cfg.observables.tier2.enabled:
+        t2 = cfg.observables.tier2
+        tier2 = tier2_record(
+            real,
+            inputs_from_config(t2.omega_q, t2.g0, t2.gamma0, t2.T),
+            sx=obs.sx,
+            sz=obs.sz,
+        ).to_json_dict()
     store.write_final(
         g,
         {
@@ -234,6 +248,7 @@ def run_realization(
             "sx": {f"{x},{y}": v for (x, y), v in obs.sx.items()},
             "czz_r": {str(r): v for r, v in obs.czz_r.items()},
             "n_res_r": {str(r): v for r, v in obs.n_res_r.items()},
+            "tier2": tier2,  # None unless observables.tier2.enabled (§12)
         },
     )
     return "finalized"

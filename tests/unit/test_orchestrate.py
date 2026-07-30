@@ -9,6 +9,7 @@ import yaml
 
 from tlsmbl.core.config import Config
 from tlsmbl.ensemble.aggregate import aggregate_run
+from tlsmbl.observables.decoherence import Tier2InputsUnavailable, inputs_from_config
 from tlsmbl.ensemble.orchestrate import run_ensemble, run_realization
 from tlsmbl.io import store
 
@@ -96,6 +97,70 @@ def test_report_carries_the_definition_of_done_sections(tmp_path: Path) -> None:
     # sdrg.enabled is True in _BASE, so the bypass audit must be a number, not "n/a".
     assert agg.n_sdrg_bypassed is not None
     assert "n/a (Stage A off)" not in text
+
+
+def test_tier2_disabled_says_so_in_the_report(tmp_path: Path) -> None:
+    """§12: Tier-2's status must never be ambiguous. Off is stated, not omitted."""
+    out = run_ensemble(_cfg(tmp_path))
+    agg = aggregate_run(out)
+    assert agg.tier2 is None
+    text = Path(str(out), "REPORT.md").read_text()
+    assert "## Tier 2" in text and "not computed" in text
+    assert "observables.tier2.enabled = false" in text
+
+
+def test_tier2_enabled_reaches_the_report_with_echoed_inputs(tmp_path: Path) -> None:
+    """§18: REPORT.md carries Tier-2 Gamma_1 with echoed model inputs. Inputs are given
+    in units of W (bare numerics) -- unit-tagged strings are refused, see
+    test_tier2_unit_tagged_inputs_are_refused."""
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "observables.tier2": {
+                "enabled": True, "omega_q": "0.5", "g0": "1e-3",
+                "gamma0": "1e-4", "T": "0.05",
+            }
+        },
+    )
+    out = run_ensemble(cfg)
+    root = store.open_run(out)
+    rec = dict(store.realization_group(root, 0).attrs["observables"])["tier2"]
+    assert rec is not None and rec["tier"] == 2
+    # Weights come from the certified state, not the bare fields, because orchestrate
+    # passes the measured polarization.
+    assert rec["weight_kind"] == "measured_state"
+    assert rec["gamma_1"] > 0.0
+    assert rec["inputs"]["raw"] == {
+        "omega_q": "0.5", "g0": "1e-3", "gamma0": "1e-4", "T": "0.05"
+    }
+
+    agg = aggregate_run(out)
+    assert agg.tier2 is not None and agg.tier2["ok"] is True
+    text = Path(str(out), "REPORT.md").read_text()
+    assert "## Tier 2" in text and "NOT certified" in text
+    assert "Gamma_1(omega_q):" in text and "spectral-diffusion rms" in text
+    assert "omega_q=0.5" in text  # echoed verbatim
+    assert "static solver cannot" in text  # DISCLAIMER travels into the report
+
+
+def test_tier2_unit_tagged_inputs_are_refused(tmp_path: Path) -> None:
+    """Converting "5.0GHz" into units of W needs W in that unit, which no layer carries.
+    Refusing beats inventing a W: a Tier-2 number looks identical either way."""
+    cfg = _cfg(
+        tmp_path,
+        **{
+            "observables.tier2": {
+                "enabled": True, "omega_q": "5.0GHz", "g0": "1e-3",
+                "gamma0": "1e-4", "T": "0.05",
+            }
+        },
+    )
+    # workers=1 propagates directly; the pool path would wrap this in a RuntimeError.
+    with pytest.raises(Tier2InputsUnavailable, match="carries a physical unit"):
+        run_ensemble(cfg)
+    # ...and it names the offending field rather than failing generically.
+    with pytest.raises(Tier2InputsUnavailable, match="requires T"):
+        inputs_from_config("0.5", "1e-3", "1e-4", None)
 
 
 def test_sketched_run_records_the_inv3_audit_trail(tmp_path: Path) -> None:

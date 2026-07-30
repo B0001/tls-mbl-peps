@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -36,6 +37,10 @@ class Aggregate:
     # they cannot stand behind (see their modules).
     xi: XiFit
     e_of_d: EnsembleExtrapolation
+    # Tier-2 (§12), None unless the run enabled it. Disorder means with bootstrap CIs
+    # over the same certified set; the declared inputs and DISCLAIMER ride along from the
+    # per-realization records, which are the authority on what was declared.
+    tier2: dict[str, object] | None
     max_disc_weight: float
     max_updown_gap: float
     # §11 audit. INV-3: worst per-realization gate-fallback rate and how many
@@ -116,6 +121,7 @@ def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggre
         e_of_d=extrapolate_ensemble(
             ladders, rng=np.random.default_rng(2), converged=ladder_flags
         ),
+        tier2=_aggregate_tier2(observables, np.random.default_rng(3)),
         max_disc_weight=max(r["max_disc_weight"] for r in reports),
         max_updown_gap=max(r["updown_gap"] for r in reports),
         worst_gate_fallback_rate=(
@@ -129,6 +135,72 @@ def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggre
     )
     _write_outputs(root, path, agg)
     return agg
+
+
+def _aggregate_tier2(
+    observables: list[dict[str, Any]], rng: np.random.Generator
+) -> dict[str, Any] | None:
+    """Disorder-averages the per-realization Tier-2 records, or None if the run had none.
+
+    Refuses to average across *different* declared inputs: Gamma_1 at two different
+    omega_q are two different quantities, and a mean of them means nothing. Mixed inputs
+    are reported as such instead of being silently pooled.
+    """
+    recs = [o["tier2"] for o in observables if o.get("tier2")]
+    if not recs:
+        return None
+    declared = {json.dumps(r["inputs"], sort_keys=True) for r in recs}
+    if len(declared) > 1:
+        return {
+            "ok": False,
+            "reason": "mixed_declared_inputs",
+            "n_realizations": len(recs),
+            "disclaimer": recs[0]["disclaimer"],
+        }
+    out: dict[str, Any] = {
+        "ok": True,
+        "reason": "ok",
+        "n_realizations": len(recs),
+        "inputs": recs[0]["inputs"],
+        "weight_kind": recs[0]["weight_kind"],
+        "disclaimer": recs[0]["disclaimer"],
+        "tier": 2,
+    }
+    for key in ("gamma_1", "spectral_diffusion_rms", "mean_transverse_weight"):
+        out[key] = _boot_ci(np.array([float(r[key]) for r in recs]), rng)
+    out["min_abs_detuning"] = float(min(float(r["min_abs_detuning"]) for r in recs))
+    return out
+
+
+def _tier2_lines(t: dict[str, Any] | None) -> list[str]:
+    """Tier-2 block for REPORT.md. Absent-by-default is stated explicitly rather than
+    left as a silent omission -- a missing section reads as an oversight, and §12's whole
+    point is that Tier-2's status is never ambiguous."""
+    if t is None:
+        return [
+            "- not computed (observables.tier2.enabled = false). Tier-1 observables "
+            "above are the rigorous outputs."
+        ]
+    if not t.get("ok"):
+        return [
+            f"- not aggregated ({t['reason']}): {t['n_realizations']} realizations do "
+            "not share one set of declared inputs, and Gamma_1 at different declared "
+            "inputs are different quantities.",
+            f"- {t['disclaimer']}",
+        ]
+    g, sd, w = t["gamma_1"], t["spectral_diffusion_rms"], t["mean_transverse_weight"]
+    raw = (t["inputs"] or {}).get("raw") or {}
+    echoed = ", ".join(f"{k}={v}" for k, v in sorted(raw.items())) or ", ".join(
+        f"{k}={t['inputs'][k]:.6g}" for k in ("omega_q", "g0", "gamma0", "T")
+    )
+    return [
+        f"- Gamma_1(omega_q): {g[0]:.6e} [{g[1]:.6e}, {g[2]:.6e}] (units of W)",
+        f"- spectral-diffusion rms shift: {sd[0]:.6e} [{sd[1]:.6e}, {sd[2]:.6e}]",
+        f"- transverse weight [{t['weight_kind']}]: {w[0]:.4f} [{w[1]:.4f}, {w[2]:.4f}]",
+        f"- closest resonance |E_i - omega_q| over the ensemble: {t['min_abs_detuning']:.6e}",
+        f"- declared model inputs (echoed verbatim): {echoed}",
+        f"- {t['disclaimer']}",
+    ]
 
 
 def _e_of_d_lines(e: EnsembleExtrapolation) -> list[str]:
@@ -182,6 +254,9 @@ def _write_outputs(root, path: str | Path, agg: Aggregate) -> None:  # type: ign
         "",
         "## E(D) extrapolation (1/D)",
         *_e_of_d_lines(agg.e_of_d),
+        "",
+        "## Tier 2 — model-dependent decoherence estimates (NOT certified)",
+        *_tier2_lines(agg.tier2),
         "",
         "## Invariant audit",
         f"- worst discarded weight (INV-1): {agg.max_disc_weight:.3e}",
