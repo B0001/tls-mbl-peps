@@ -62,6 +62,61 @@ def test_pipeline_end_to_end_and_aggregate(tmp_path: Path) -> None:
     assert (out / "REPORT.md").exists() or Path(str(out), "REPORT.md").exists()
 
 
+def test_report_carries_the_definition_of_done_sections(tmp_path: Path) -> None:
+    """§18: REPORT.md must contain E(D) extrapolation, q_EA, xi, n_res(r) and the full
+    invariant audit. The two verdict-carrying entries (xi, E(D)) must render whichever
+    way they resolve, so this asserts the sections are present and self-labeling rather
+    than pinning numbers that depend on the optimizer floor."""
+    cfg = _cfg(tmp_path, **{"peps.ladder": [2, 3]})
+    out = run_ensemble(cfg)
+    agg = aggregate_run(out)
+    text = Path(str(out), "REPORT.md").read_text()
+
+    assert "q_EA:" in text and "n_res(r):" in text
+    assert "## E(D) extrapolation (1/D)" in text
+    # A 2-rung ladder is a secant, and the report has to say so rather than dressing it
+    # up as a fit (the pilot config ships exactly this ladder).
+    assert agg.e_of_d.method == "secant_2pt"
+    assert "secant_2pt" in text and "no fit residual" in text
+    # xi either resolves with a CI or states why not -- never a bare number.
+    assert "xi: " in text
+    assert agg.xi.ok == (agg.xi.xi is not None)
+    if not agg.xi.ok:
+        assert "unresolved" in text and agg.xi.reason in text
+    # Full audit, including the entries that were missing before ADR-016.
+    for line in (
+        "worst discarded weight (INV-1)",
+        "worst up/down gap (INV-1)",
+        "uncertified excluded",
+        "worst sketch gate-fallback rate (INV-3)",
+        "sketching auto-disabled (INV-3)",
+        "SDRG bypasses (INV-8)",
+    ):
+        assert line in text, f"missing audit line: {line}"
+    # sdrg.enabled is True in _BASE, so the bypass audit must be a number, not "n/a".
+    assert agg.n_sdrg_bypassed is not None
+    assert "n/a (Stage A off)" not in text
+
+
+def test_sketched_run_records_the_inv3_audit_trail(tmp_path: Path) -> None:
+    """ADR-016: the sketched backend's counters must reach the stored report and the
+    REPORT.md audit -- `EnvCertificate.fallback_count` used to be hardcoded to 0."""
+    cfg = _cfg(tmp_path, **{"kernels.backend": "sketched"})
+    out = run_ensemble(cfg)
+    root = store.open_run(out)
+    stats = dict(store.realization_group(root, 0).attrs["report"])["sketch_stats"]
+    assert stats is not None, "sketched run recorded no INV-3 stats"
+    assert stats["call_count"] > 0
+    assert stats["sketching_disabled"] is False  # tiny lossless operands: no thrashing
+    assert 0.0 <= stats["gate_fallback_rate"] <= 1.0
+
+    agg = aggregate_run(out)
+    assert agg.worst_gate_fallback_rate is not None
+    assert agg.n_sketch_disabled == 0
+    text = Path(str(out), "REPORT.md").read_text()
+    assert "not recorded" not in text  # a sketched run must report a real rate
+
+
 def test_resume_after_kill_loses_at_most_one_rung(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, **{"peps.ladder": [2, 3], "optimize.max_outer": 4})
     out = Path(cfg.run.out)

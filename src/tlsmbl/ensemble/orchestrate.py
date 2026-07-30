@@ -49,6 +49,10 @@ def _backend(cfg: Config, sketch_seed: int) -> TruncationBackend:
         c_gate=k.c_gate,
         probes=k.probes,
         eps_F=k.eps_F,
+        # INV-3 failure action (ADR-016). One backend per realization, so the
+        # backend-scoped disable IS the "disable sketching for the realization"
+        # the invariant calls for.
+        disable_rate=k.fallback_disable_rate,
     )
 
 
@@ -218,6 +222,11 @@ def run_realization(
             "tail_bound": tb,
             "inv5_ok": inv5_ok,
             "certified": report.certified,
+            # §11 audit: REPORT.md must echo fallback rates and bypass counts, so
+            # they have to be persisted per realization, not just logged.
+            "sketch_stats": report.env.sketch_stats,
+            "sdrg_bypassed": bool(sdrg.bypassed) if sdrg is not None else None,
+            "sdrg_ledger_total": float(sdrg.ledger.total) if sdrg is not None else None,
         },
         {
             "q_ea": obs.q_ea,

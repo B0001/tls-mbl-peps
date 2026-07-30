@@ -171,6 +171,9 @@ def compress_factored(
     is accepted for interface symmetry -- unlike v1 this path has no
     QR-vs-SVD split (no QR at all)."""
     del want_grad
+    # Same backend-counter delta as zipup.compress: INV-3 fallbacks in the factored
+    # path must reach the audit too, or `env.factored: true` would silently zero them.
+    fb_base: int | None = getattr(backend, "fallback_count", None)
     out_b, discs, log_norm = _sweep_factored(
         [m.unsqueeze(0) for m in Ms],
         [a.unsqueeze(0) for a in As],
@@ -183,7 +186,11 @@ def compress_factored(
         max_disc_weight=max(disc_list),
         disc_weights=disc_list,
         log_norm=float(log_norm[0]),
-        fallback_count=0,
+        fallback_count=(
+            0
+            if fb_base is None
+            else int(getattr(backend, "fallback_count", fb_base)) - fb_base
+        ),
     )
 
 

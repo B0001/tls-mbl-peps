@@ -10,7 +10,14 @@ from pathlib import Path
 
 import numpy as np
 
+from tlsmbl.ensemble.extrapolate import (
+    METHOD_SECANT,
+    EnsembleExtrapolation,
+    extrapolate_ensemble,
+    read_rung_energies,
+)
 from tlsmbl.io import store
+from tlsmbl.observables.localization import XiFit, fit_xi
 
 _BOOT = 10_000
 
@@ -24,8 +31,21 @@ class Aggregate:
     q_ea: tuple[float, float, float]
     czz_r: dict[int, tuple[float, float, float]]
     n_res_r: dict[int, float]
+    # §18 definition of done: REPORT.md carries the E(D) extrapolation and xi. Both are
+    # verdict-carrying -- they report "unresolved" with a reason rather than a number
+    # they cannot stand behind (see their modules).
+    xi: XiFit
+    e_of_d: EnsembleExtrapolation
     max_disc_weight: float
     max_updown_gap: float
+    # §11 audit. INV-3: worst per-realization gate-fallback rate and how many
+    # realizations tripped the auto-disable. INV-8: SDRG bypass count. None where the
+    # run did not exercise the mechanism (exact backend / sdrg disabled) -- reported as
+    # "n/a" rather than a misleading 0.
+    worst_gate_fallback_rate: float | None
+    n_sketch_disabled: int | None
+    n_sdrg_bypassed: int | None
+    worst_sdrg_ledger: float | None
 
 
 def _boot_ci(values: np.ndarray, rng: np.random.Generator) -> tuple[float, float, float]:
@@ -38,6 +58,8 @@ def _boot_ci(values: np.ndarray, rng: np.random.Generator) -> tuple[float, float
 def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggregate:
     root = store.open_run(path)
     reports, observables = [], []
+    ladders: list[dict[int, float]] = []
+    ladder_flags: list[dict[int, bool]] = []
     n_total = n_cert = 0
     for name in store.list_realizations(root):
         g = store.subgroup(root, f"realizations/{name}")
@@ -51,6 +73,11 @@ def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggre
             rep["_uncertified"] = not cert
             reports.append(rep)
             observables.append(store.read_attr_dict(g, "observables"))
+            # Per-rung ladder energies for the E(D) extrapolation. Read from the rung
+            # records the ladder already checkpointed, so this never re-optimizes.
+            energies, flags = read_rung_energies(g)
+            ladders.append(energies)
+            ladder_flags.append(flags)
     if not reports:
         raise RuntimeError("no usable realizations (all uncertified or unfinished)")
 
@@ -64,6 +91,13 @@ def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggre
             czz.setdefault(int(r), []).append(v)
         for r, v in o["n_res_r"].items():
             nres.setdefault(int(r), []).append(v)
+    # §11 audit rollup. `sketch_stats` is absent for exact-backend runs and for
+    # artifacts written before the INV-3 audit landed, hence the None-vs-0 care.
+    sk = [r["sketch_stats"] for r in reports if r.get("sketch_stats")]
+    byp = [r["sdrg_bypassed"] for r in reports if r.get("sdrg_bypassed") is not None]
+    led = [
+        r["sdrg_ledger_total"] for r in reports if r.get("sdrg_ledger_total") is not None
+    ]
     agg = Aggregate(
         n_total=n_total,
         n_certified=n_cert,
@@ -72,11 +106,61 @@ def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggre
         q_ea=_boot_ci(q, rng),
         czz_r={r: _boot_ci(np.array(v), rng) for r, v in sorted(czz.items())},
         n_res_r={r: float(np.mean(v)) for r, v in sorted(nres.items())},
+        # Fresh generators, not the shared `rng`: threading one generator through
+        # three estimators would make each one's numbers depend on the order the
+        # others were called in.
+        xi=fit_xi(
+            [{int(r): float(v) for r, v in o["czz_r"].items()} for o in observables],
+            rng=np.random.default_rng(1),
+        ),
+        e_of_d=extrapolate_ensemble(
+            ladders, rng=np.random.default_rng(2), converged=ladder_flags
+        ),
         max_disc_weight=max(r["max_disc_weight"] for r in reports),
         max_updown_gap=max(r["updown_gap"] for r in reports),
+        worst_gate_fallback_rate=(
+            max(float(s["gate_fallback_rate"]) for s in sk) if sk else None
+        ),
+        n_sketch_disabled=(
+            sum(bool(s["sketching_disabled"]) for s in sk) if sk else None
+        ),
+        n_sdrg_bypassed=sum(bool(b) for b in byp) if byp else None,
+        worst_sdrg_ledger=max(float(x) for x in led) if led else None,
     )
     _write_outputs(root, path, agg)
     return agg
+
+
+def _e_of_d_lines(e: EnsembleExtrapolation) -> list[str]:
+    """Renders the E(D) block. A secant-only ensemble (the 2-rung ladder of
+    configs/pilot_L8.yaml) is labeled as such: it carries no fit uncertainty, so
+    presenting it like a 3-rung fit would overstate what the ladder measured."""
+    if not e.ok or e.e_inf is None or e.remaining_gap is None:
+        detail = ", ".join(f"{k}: {v}" for k, v in sorted(e.refusals.items()))
+        return [
+            f"- unresolved ({e.reason}); {e.n_used}/{e.n_total} realizations usable"
+            + (f" [{detail}]" if detail else "")
+        ]
+    lines = [
+        f"- method: {e.method} ({e.n_used}/{e.n_total} realizations"
+        + (f", {e.n_tainted} tainted by an unconverged rung" if e.n_tainted else "")
+        + ")",
+        f"- E_inf (total): {e.e_inf[0]:+.9f} [{e.e_inf[1]:+.9f}, {e.e_inf[2]:+.9f}]",
+        f"- remaining gap |E(D_max) - E_inf|: {e.remaining_gap[0]:.3e} "
+        f"[{e.remaining_gap[1]:.3e}, {e.remaining_gap[2]:.3e}]"
+        "  <- unmeasured ansatz truncation, not a bound",
+    ]
+    if e.method == METHOD_SECANT:
+        lines.append(
+            "- NOTE: 2-rung ladder -> exact 2-point secant, no fit residual and no "
+            "per-realization fit uncertainty. Add a third rung for a fitted E(D)."
+        )
+    if e.refusals:
+        lines.append(
+            "- excluded: "
+            + ", ".join(f"{k}: {v}" for k, v in sorted(e.refusals.items()))
+        )
+    return lines
 
 
 def _write_outputs(root, path: str | Path, agg: Aggregate) -> None:  # type: ignore[no-untyped-def]
@@ -94,10 +178,37 @@ def _write_outputs(root, path: str | Path, agg: Aggregate) -> None:  # type: ign
         "- Czz(r): "
         + ", ".join(f"r={r}: {v[0]:+.3e}" for r, v in agg.czz_r.items()),
         "- n_res(r): " + ", ".join(f"r={r}: {v:.2f}" for r, v in agg.n_res_r.items()),
+        f"- {agg.xi.summary_line()}",
+        "",
+        "## E(D) extrapolation (1/D)",
+        *_e_of_d_lines(agg.e_of_d),
         "",
         "## Invariant audit",
         f"- worst discarded weight (INV-1): {agg.max_disc_weight:.3e}",
         f"- worst up/down gap (INV-1): {agg.max_updown_gap:.3e}",
         f"- uncertified excluded: {agg.n_total - agg.n_certified}",
+        # Deliberately does NOT claim "exact backend": the manifest does not record
+        # which backend ran, so absence of sketch stats is ambiguous between an exact
+        # run and an artifact written before the INV-3 audit existed. Saying which one
+        # would be a guess.
+        "- worst sketch gate-fallback rate (INV-3): "
+        + (
+            "not recorded (exact backend, or artifact predates the INV-3 audit)"
+            if agg.worst_gate_fallback_rate is None
+            else f"{agg.worst_gate_fallback_rate:.1%}"
+        ),
+        "- realizations with sketching auto-disabled (INV-3): "
+        + ("n/a" if agg.n_sketch_disabled is None else str(agg.n_sketch_disabled)),
+        "- SDRG bypasses (INV-8): "
+        + (
+            "n/a (Stage A off)"
+            if agg.n_sdrg_bypassed is None
+            else f"{agg.n_sdrg_bypassed}"
+            + (
+                ""
+                if agg.worst_sdrg_ledger is None
+                else f", worst ledger {agg.worst_sdrg_ledger:.3f}"
+            )
+        ),
     ]
     Path(path, "REPORT.md").write_text("\n".join(lines) + "\n")

@@ -263,6 +263,10 @@ class EnvCertificate:
     updown_gap: float
     row_consistency: float
     fallback_count: int
+    # INV-3 audit (§11: REPORT.md echoes fallback rates). Populated from the backend's
+    # own counters, which are per-realization because the instance is; None for the
+    # exact backend, which has no sketch to fall back from.
+    sketch_stats: dict[str, float | int | bool | None] | None = None
 
 
 _FACTORY_TOKEN = object()
@@ -327,6 +331,12 @@ def energy_certified(
             f"INV-1: up/down energy gap {gap:.3e} > eps_env_E {eps_env_E:.1e} at chi={chi}"
         )
     N = state.L**2
+    # INV-3 audit: read the backend's own cumulative counters rather than reporting a
+    # placeholder. Cumulative is the right scope -- the backend instance is built once
+    # per realization from its spawned sketch stream (orchestrate.py::_backend), so
+    # these counts describe exactly the realization being certified.
+    stats_fn = getattr(backend, "stats", None)
+    sketch_stats = stats_fn() if callable(stats_fn) else None
     return EnergyReport(
         e_total=float(E_down),
         e_per_site=float(E_down) / N,
@@ -335,7 +345,8 @@ def energy_certified(
             max_disc_weight=max_disc,
             updown_gap=gap,
             row_consistency=row_c,
-            fallback_count=0,
+            fallback_count=int(getattr(backend, "fallback_count", 0)),
+            sketch_stats=sketch_stats,
         ),
         tail_bound=tail_bound,
         chi_stability=None,

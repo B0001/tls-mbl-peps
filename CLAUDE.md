@@ -40,7 +40,7 @@ no-GIL 3.14, but certification runs are not validated there.
 - `prototypes/` is a **reference oracle, not production code**. Never import it from
   `src/`. Production must reproduce its numbers through `tests/golden/`.
 - Anything underspecified: pick the simplest invariant-consistent option, record an ADR
-  in `docs/adr/` (next number: **ADR-016**), continue. Do not stall.
+  in `docs/adr/` (next number: **ADR-017**), continue. Do not stall.
 
 ## Executed ADRs — do not re-litigate (each records a defect found by running code)
 | ADR | Operational consequence for you |
@@ -51,6 +51,7 @@ no-GIL 3.14, but certification runs are not validated there.
 | 012 | Truncation gradient = full economy SVD + slice — exact for the compression graph (outputs recombine bilinearly), including kept↔discarded coupling. The projector formula is the *sketched-backend fallback only*. |
 | 013 | SDRG PT₂ coefficients: use §9's **current** formulas (original prose had two factor-2 errors). `sdrg_3site.py` Tier-I identity is the arbiter for any change. |
 | 015 | Factored compression (`env.factored`, needed for D≥6) = bond-Gram canonicalization, NOT the original uncanonicalized LinearOp sketch (that violates ADR-010). Equivalence gate: `tests/unit/test_factored_compress.py`. |
+| 016 | INV-3's *second* failure action (auto-disable at >20% fallback) was a dead config knob; now enforced **in `SketchedSVD` on the hot path**, driven by `gate_fallback_rate` only (structural `k≤χ` fallbacks excluded), warmup-gated at 32 sketchable calls, monotonic. `fallback_count` no longer hardcoded to 0 in `EnvCertificate`. |
 
 ## Status → task queue
 **DONE, validated in prototypes (math framework-portable):** kernel scaling + INV-3 gate

@@ -80,14 +80,16 @@ def compress(
     carry = torch.ones((1, 1), dtype=mps[0].dtype, device=mps[0].device)
     out: list[torch.Tensor] = []
     discs: list[float] = []
-    fallbacks = 0
+    # Fallbacks attributable to THIS compression = the delta of the backend's own
+    # counter across the sweep. Reading the counter beats inferring from
+    # `posterior_err is None`, which cannot distinguish "sketch fell back" from
+    # "backend is exact and never sketches".
+    fb_base: int | None = getattr(backend, "fallback_count", None)
     for T in mps:
         W = torch.einsum("kK,Kwm->kwm", carry, T)
         k, w, m = W.shape
         res = backend.truncate(W.reshape(k * w, m), chi)  # E-5 operand
         discs.append(res.disc_weight)
-        if res.posterior_err is not None:
-            fallbacks += 0  # sketched backend counts its own fallbacks (Phase 3)
         kk = res.S.shape[0]
         out.append(res.U.reshape(k, w, kk))
         carry = res.S.to(res.Vh.dtype)[:, None] * res.Vh
@@ -98,7 +100,11 @@ def compress(
         max_disc_weight=max(discs),
         disc_weights=discs,
         log_norm=float(torch.log(scale)),
-        fallback_count=fallbacks,
+        fallback_count=(
+            0
+            if fb_base is None
+            else int(getattr(backend, "fallback_count", fb_base)) - fb_base
+        ),
     )
 
 
