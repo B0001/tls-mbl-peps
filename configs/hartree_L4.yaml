@@ -1,0 +1,35 @@
+# §7.4 Hartree tail self-consistency, exercised end to end at L=4.
+#
+# The loop is OFF in every production config (smoke/pilot/benchmark run the v1
+# pure-truncation baseline, h_mf = 0, with the rigorous INV-5 bound reported
+# regardless). This config exists so the loop is runnable and reviewable without
+# editing a production one.
+#
+# Cost warning: each outer iteration re-runs the WHOLE D-ladder from a product
+# init -- a new h_mf changes H, so the previous iteration's optimum solves a
+# different problem. Budget K_max x (a normal realization), not one.
+#
+# R_c = 1 is deliberate: it leaves a substantial r > R_c tail for the mean field
+# to act on, which is what makes this a test of the loop rather than of zero.
+# Production R_c = 3 leaves a much smaller tail (and a correspondingly smaller
+# INV-5 bound), so expect fewer iterations to converge there.
+#
+# INV-5 note: the bound does NOT shrink because the loop ran. The loop moves the
+# neglected error (the tail's mean-field part is treated, its correlations are
+# not) and 2*pi*g_J/R_c still bounds what remains. `report.hartree.bound_covers`
+# records which statement is being made.
+run:      { name: hartree-L4, master_seed: 20260731, n_realizations: 2, workers: 2, out: runs/hartree_L4.zarr }
+model:    { L: 4, delta_min: 1.0e-3, g_J: 1.0e-2, R_c: 1, polaron_kappa: 0.0,
+            hartree: { enabled: true, K_max: 8, alpha: 0.5, tol: 1.0e-4 } }
+sdrg:     { enabled: false, omega_stop: 0.3, f_max: 0.4, keep_first_order: true, tau_sdrg: 0.05 }
+peps:     { ladder: [2], chi_factor: 1, dtype: complex128 }
+env:      { eps_env: 1.0e-8, eps_env_E: 1.0e-6, polish: true, checkpoint_rows: true, retry_max: 3, dchi: auto }
+kernels:  { backend: exact, oversample: 8, power_iters: 1, eta: 1.0e-6, c_gate: 10.0, probes: 6,
+            fallback_disable_rate: 0.20, eps_F: 1.0e-12 }
+optimize: { su_steps: 0, inner_iters: 20, max_outer: 40, tol_E: 1.0e-8, tol_g_scale: 1.0e-6 }
+# tau_tail is loose here: at g_J = 1e-2 with R_c = 1 the rigorous bound
+# 2*pi*g_J/R_c ~ 6.3e-2 is large next to |e_per_site|, so a production-tight
+# tau_tail would (correctly) mark these artifacts UNCERTIFIED. This config
+# exercises the loop, not the INV-5 verdict.
+invariants: { tau_chi: 1.0e-6, tau_tail: 10.0, allow_uncertified: false }
+observables: { tier2: { enabled: false } }

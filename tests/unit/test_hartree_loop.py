@@ -250,39 +250,3 @@ def test_inv5_bound_does_not_shrink_when_the_loop_runs() -> None:
     e = -0.3
     assert tail_certified(_GJ, _RC, e, 10.0) is tail_certified(_GJ, _RC, e, 10.0)
     assert res.tail_bound > 0.0
-
-
-def test_enabling_hartree_refuses_instead_of_silently_no_opping() -> None:
-    """The loop is not yet driven from the orchestrator. Accepting the flag and running
-    the h_mf = 0 baseline anyway would be a knob that is read, validated and ignored --
-    the exact defect ADR-016 documents for INV-3's auto-disable. So it raises."""
-    from tlsmbl.core.config import Config
-    from tlsmbl.ensemble.orchestrate import run_realization
-
-    # Inlined rather than imported from test_orchestrate: tests/ has no __init__.py, so
-    # there is no package to import a sibling module from.
-    cfg = Config.model_validate(
-        {
-            "run": {"name": "t", "master_seed": 20260716, "n_realizations": 1,
-                    "workers": 1, "out": "unused.zarr"},
-            "model": {"L": 3, "delta_min": 1.0e-3, "g_J": 0.3, "R_c": 3,
-                      "polaron_kappa": 0.0,
-                      "hartree": {"enabled": True, "K_max": 8, "alpha": 0.5,
-                                  "tol": 1.0e-4}},
-            "sdrg": {"enabled": False, "omega_stop": 0.3, "f_max": 0.4,
-                     "keep_first_order": True, "tau_sdrg": 0.05},
-            "peps": {"ladder": [2], "chi_factor": 1, "dtype": "complex128"},
-            "env": {"eps_env": 1.0e-8, "eps_env_E": 1.0e-6, "polish": True,
-                    "checkpoint_rows": True, "retry_max": 3, "dchi": "auto"},
-            "kernels": {"backend": "exact", "oversample": 8, "power_iters": 1,
-                        "eta": 1.0e-6, "c_gate": 10.0, "probes": 6,
-                        "fallback_disable_rate": 0.2, "eps_F": 1.0e-12},
-            "optimize": {"su_steps": 0, "inner_iters": 20, "max_outer": 8,
-                         "tol_E": 1.0e-8, "tol_g_scale": 1.0e-6},
-            "invariants": {"tau_chi": 1.0e-4, "tau_tail": 10.0,
-                           "allow_uncertified": False},
-            "observables": {"tier2": {"enabled": False}},
-        }
-    )
-    with pytest.raises(NotImplementedError, match="not wired into the orchestrator"):
-        run_realization(cfg, 0, "unused.zarr")

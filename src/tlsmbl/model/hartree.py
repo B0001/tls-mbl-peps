@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Callable, Iterator
 
 import numpy as np
@@ -142,6 +143,10 @@ def hartree_loop(
     K_max: int = 8,
     alpha: float = 0.5,
     tol: float = 1e-4,
+    h_mf0: np.ndarray | None = None,
+    start_iter: int = 1,
+    history0: Sequence[float] = (),
+    before_iteration: Callable[[int, np.ndarray, tuple[float, ...]], None] | None = None,
 ) -> HartreeResult:
     """§7.4's outer self-consistency loop.
 
@@ -157,17 +162,37 @@ def hartree_loop(
     Damping (`alpha`, default 0.5) is what makes this converge rather than oscillate: the
     map m -> h -> m is sign-flipping for antiferromagnetic tail couplings, so alpha = 1
     can two-cycle indefinitely. Non-convergence within K_max is REPORTED, not raised.
+
+    RESUMPTION. `h_mf0` / `start_iter` / `history0` restart a loop that was interrupted,
+    and `before_iteration(n, h_mf)` is called at the top of each iteration *before*
+    `solve`. `ensemble/orchestrate.py` uses the hook to checkpoint the field and clear the
+    previous iteration's ladder, which is what lets the outer loop survive a kill without
+    this module knowing anything about zarr. Keeping resumption here rather than
+    reimplementing the recurrence in the orchestrator means §7.4 has exactly one
+    implementation.
     """
     if K_max < 1:
         raise ValueError(f"K_max must be >= 1 (got {K_max})")
     if not 0.0 < alpha <= 1.0:
         raise ValueError(f"alpha must be in (0, 1] (got {alpha})")
-    h_mf = np.zeros((L, L), dtype=np.float64)
-    history: list[float] = []
+    if start_iter < 1:
+        raise ValueError(f"start_iter must be >= 1 (got {start_iter})")
+    h_mf = (
+        np.zeros((L, L), dtype=np.float64)
+        if h_mf0 is None
+        else np.array(h_mf0, dtype=np.float64)
+    )
+    if h_mf.shape != (L, L):
+        raise ValueError(f"h_mf0 must have shape {(L, L)}, got {h_mf.shape}")
+    history: list[float] = list(history0)
     converged = False
     max_delta = float("inf")
-    n = 0
-    for n in range(1, K_max + 1):
+    n = start_iter - 1
+    for n in range(start_iter, K_max + 1):
+        if before_iteration is not None:
+            # (iteration, field about to be solved in, history so far) -- everything a
+            # checkpoint needs to resume this exact iteration.
+            before_iteration(n, h_mf, tuple(history))
         m = np.asarray(solve(h_mf), dtype=np.float64)
         h_new = tail_field(m, tail_seed=tail_seed, L=L, R_c=R_c, g_J=g_J)
         # §7.4's stopping test compares the CURRENT field to the proposed one, i.e. it

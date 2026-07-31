@@ -59,15 +59,22 @@ no-GIL 3.14, but certification runs are not validated there.
 51/51); differentiable energy, exact truncation gradients, LBFGS→ED (`ad_phase2.py`); L=4
 golden incl. INV-2 in anger (`phase3_4x4.py`); SDRG decimation rules (`sdrg_3site.py`, 9/9).
 
-**TODO, in order (exit criteria = ARCHITECTURE.md §16 rows):**
-1. **P0** `src/tlsmbl/core`: units, rng (INV-6), guards (INV-7), pydantic config (§13), manifest.
-2. **P1** port model + ED oracle from prototypes into `src/tlsmbl/model` + golden fixtures.
-3. **P2** torch port of peps/kernels/autodiff/optimize. Parity contract: pass the SAME gates
-   at the SAME thresholds as the prototypes (table in `docs/HANDOFF.md`); T-AD-FD must
-   include a genuinely truncating χ configuration, not only the lossless one.
-4. **P3** sketched backend + two-sided gate + T-PERF (exponent gap ≥1.6; prototype measured 3.30).
-5. **P4** SDRG circuit/transform/ledger + A/B harness (a negative A/B result is a valid exit).
-6. **P5** ensemble/zarr/resume/aggregate + INV-5. P6/P7 conditional per §16.
+**P0–P5 COMPLETE (2026-07-31).** All §16 exit criteria green; §18's definition of done is
+met: `REPORT.md` carries E(D) extrapolation, q_EA, ξ, n_res(r), Tier-2 Γ₁ with echoed
+inputs, and the full invariant audit. Suite 214 passed / 2 skipped, mypy + ruff clean,
+`make verify` 51/51 and 9/9, `make verify-jax` bit-identical across four recorded runs.
+
+**Remaining, all conditional or study work:**
+1. **P6 (cond.)** Rust zip-up kernel via pyo3 — the only path to D=6 at production L
+   (measured: D=6 is wall-clock-blocked, ~1.7 h/gradient step; ADR-008 scopes the FFI to
+   the whole row loop, not the SVD, because ADR-010's canonicalization not the SVD is the cost).
+2. **P7 (cond.)** L2/L3 sharding — only if the 1/D extrapolation demands D ≥ 10.
+3. **Physics study plan (§12):** the D-ladder extrapolation, R_c and L sweeps, and the
+   resonance census now all have machinery; what is missing is *runs*. The L=8 pilot is
+   deep-localized (ξ correctly unresolved, n_res ≡ 0) — a g_J sweep is what would show a
+   crossover. Note 3 of 4 pilot realizations are tainted by an unconverged D=3 rung.
+4. Record the kernel backend in the manifest so the INV-3 audit can say "exact backend"
+   instead of "not recorded" (see ADR-016's consequences).
 
 ## Gotchas (paid for in prototyping — do not pay again)
 - Prototypes reuse 3×3 modules for 4×4 via a **module-global `L` monkey-patch**

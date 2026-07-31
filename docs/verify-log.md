@@ -206,3 +206,62 @@ always straddles zero (measured lambda_max = 5.79e-3, lambda_min = -5.12e-3 at L
 R_c=1, g_J=1e-2, seed 3). If the gain pushes the POSITIVE branch above 1, damping cannot
 help for any alpha — a first attempt at gain = -500 diverged even at alpha = 0.05. The
 gain is placed in the window where only the negative (two-cycle) branch is unstable.
+
+## P5 complete — Hartree loop driven by the orchestrator (2026-07-31)
+
+```
+uv run pytest tests            -> 214 passed, 2 skipped   (session baseline: 138 passed, 2 skipped)
+uv run mypy                    -> Success: no issues found in 48 source files
+uv run ruff check .            -> All checks passed!
+make verify                    -> ALL PASS (51/51), ALL PASS (9/9)
+make verify-jax                -> consistency D=2 2.032e-15,  D=3 2.218e-14
+                                  T-AD-FD chi=4 1.337e-09,  chi=2 4.763e-09
+tlsmbl run configs/hartree_L4.yaml -> 2:37, both realizations certified, loop converged
+```
+
+Jax numbers bit-identical for the fourth recorded run.
+
+**The loop is now driven per realization** (§16 P5's last exit item): SDRG + D-ladder +
+<sigma^z> measurement became the inner problem, re-entered per outer iteration with an
+updated h_mf. `hartree_loop` gained resumption parameters rather than having its
+recurrence reimplemented in the orchestrator, so §7.4 still has exactly one implementation.
+
+Measured on `configs/hartree_L4.yaml` (L=4, g_J=1e-2, R_c=1, alpha=0.5): converged in 7
+and 8 outer iterations, both realizations certified. The field mismatch halves *exactly*
+each iteration (5.277e-3, 2.638e-3, 1.318e-3, ...), i.e. the iteration is dominated by the
+damping factor (1-alpha) because the tail's mean-field response is weak — consistent with
+the measured tail-operator spectral radius of ~5.8e-3.
+
+**A real bug was found by asserting the resume contract, and it is worth internalizing.**
+A resumed Hartree run was not bitwise identical to an uninterrupted one (1.05e-6 relative
+in the final energy), while two uninterrupted runs were. Ruled out first, all measured:
+the zarr rung round-trip is bit-exact; the h_mf JSON-attrs round-trip is bit-exact;
+`optimize_lbfgs` does not touch torch's global RNG and *is* a pure function of its inputs
+(identical back-to-back, after intervening calls, and single-threaded); thread count was
+unchanged. At outer iteration 2 the inputs (h_mf, eps, delta, J) were bit-identical, yet
+the result differed — which localized it to the init.
+
+Cause: `PEPSState.from_product` calls `seed_seq.spawn(L*L)`, and **spawn is stateful**.
+The ladder's SeedSequences had been hoisted out of the per-outer-iteration path, so an
+uninterrupted run drew spawn children L^2..2L^2-1 at outer 2 while a resumed run — which
+skips outer 1's init — drew 0..L^2-1. Different product inits, different optima. This is
+precisely the hazard `core/rng.py`'s own docstring warns about ("reusing a live object
+across calls would silently break bit-reproducibility (T-DET)"), and it was reintroduced
+the moment a call site started running the ladder more than once. Fixed by building a
+fresh root SeedSequence per inner solve; the single-call (non-Hartree) path is unchanged,
+which the golden fixtures and both baselines confirm. The resume test now asserts
+**bitwise** equality and says not to weaken it.
+
+**Artifact self-consistency:** the disorder group is written at sample time with h_mf = 0,
+so finalize now re-persists the converged field. Without it `read_disorder` would hand
+downstream analysis a different Hamiltonian from the one whose energy was certified. The
+rng fingerprint covers eps/delta/J only, so re-writing does not disturb it.
+
+**Resume contract preserved exactly:** the loop checkpoints its field *before* the ladder
+runs and clears the previous iteration's rungs after, so the rungs on disk always belong
+to the recorded outer iteration. A kill still loses at most one rung, not one outer
+iteration — asserted directly.
+
+**Cost:** each outer iteration re-runs the whole ladder from a product init (a new h_mf
+changes H, so the previous optimum solves a different problem). Budget K_max x a normal
+realization. This is why the loop stays off in smoke/pilot/benchmark.

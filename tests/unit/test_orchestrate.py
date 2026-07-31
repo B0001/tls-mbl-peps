@@ -4,6 +4,7 @@ ensemble-level T-DET, INV-5 wiring, aggregation."""
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
@@ -12,6 +13,7 @@ from tlsmbl.ensemble.aggregate import aggregate_run
 from tlsmbl.observables.decoherence import Tier2InputsUnavailable, inputs_from_config
 from tlsmbl.ensemble.orchestrate import run_ensemble, run_realization
 from tlsmbl.io import store
+from tlsmbl.model.hartree import tail_bound
 
 _BASE = {
     "run": {"name": "t", "master_seed": 20260716, "n_realizations": 2, "workers": 1,
@@ -244,3 +246,108 @@ def test_disorder_roundtrip(tmp_path: Path) -> None:
     assert back.J == real.J
     assert back.params == real.params
     assert dataclasses.asdict(back)["rng_fingerprint"] == real.rng_fingerprint
+
+
+def _hartree_cfg(tmp_path: Path, **hartree: object) -> Config:
+    h = {"enabled": True, "K_max": 3, "alpha": 0.5, "tol": 1e-12, **hartree}
+    return _cfg(
+        tmp_path,
+        **{
+            "model.hartree": h,
+            # R_c=1 leaves a real r>R_c tail on the 3x3 lattice for the loop to feed on.
+            "model.R_c": 1,
+            "sdrg.enabled": False,
+        },
+    )
+
+
+def test_hartree_loop_runs_and_reaches_a_self_consistent_field(tmp_path: Path) -> None:
+    """§16 P5's last exit item: model.hartree.enabled is actually driven, not ignored."""
+    cfg = _hartree_cfg(tmp_path)
+    out = run_ensemble(cfg)
+    root = store.open_run(out)
+    g = store.realization_group(root, 0)
+    assert store.get_stage(g) == "finalized"
+
+    rep = dict(g.attrs["report"])
+    hr = rep["hartree"]
+    assert hr is not None, "hartree.enabled produced no record -- silently no-opped?"
+    assert 1 <= hr["n_iters"] <= 3
+    assert len(hr["history"]) == hr["n_iters"]
+    assert "CORRELATIONS" in hr["bound_covers"]  # INV-5 label, not a shrunken bound
+    # The mean field actually moved: h_mf = 0 would leave nothing to converge.
+    assert hr["history"][0] > 0.0
+
+    # The stored artifact must describe the H whose energy it reports: the disorder group
+    # is written at sample time with h_mf = 0, so finalize re-persists the converged
+    # field. Without that, `read_disorder` would hand downstream analysis a different
+    # Hamiltonian from the one that was certified.
+    real = store.read_disorder(g)
+    assert not np.array_equal(real.h_mf, np.zeros_like(real.h_mf))
+    # ...and it is the field the FINAL inner solve used (the loop damps after solving,
+    # so the last checkpointed field is the one the certified state was optimized in).
+    assert np.allclose(real.h_mf, np.array(store.read_hartree(g)["h_mf"]), rtol=0, atol=0)
+    # INV-5's reported bound is the same value the baseline reports.
+    assert rep["tail_bound"] == pytest.approx(tail_bound(cfg.model.g_J, cfg.model.R_c))
+    assert rep["certified"]
+
+
+def test_hartree_off_records_no_loop_and_is_unchanged(tmp_path: Path) -> None:
+    """The v1 baseline path must be untouched by the wiring: no record, h_mf stays 0."""
+    out = run_ensemble(_cfg(tmp_path, **{"model.R_c": 1}))
+    g = store.realization_group(store.open_run(out), 0)
+    assert dict(g.attrs["report"])["hartree"] is None
+    real = store.read_disorder(g)
+    assert np.array_equal(real.h_mf, np.zeros_like(real.h_mf))
+
+
+def test_hartree_resume_after_kill_still_loses_at_most_one_rung(tmp_path: Path) -> None:
+    """The resume contract must survive the outer loop. Killing mid-ladder must resume
+    into the SAME outer iteration -- the rungs on disk belong to the checkpointed field,
+    which is why write_hartree happens before the ladder and reset_rungs after it.
+
+    T-DET applies here: a resumed run must be BITWISE identical to an uninterrupted one.
+
+    That assertion caught a real bug during development. `PEPSState.from_product` calls
+    `seed_seq.spawn(L*L)`, which is stateful, and the ladder's SeedSequences were
+    originally hoisted out of the per-outer-iteration path -- so an uninterrupted run
+    drew spawn children L^2..2L^2-1 at outer iteration 2 while a resumed run (which
+    skips outer 1's init) drew 0..L^2-1, giving different product inits and a 1.05e-6
+    relative energy difference. This is exactly the hazard core/rng.py's docstring warns
+    about ("reusing a live object across calls would silently break bit-reproducibility").
+    The fix builds a fresh root SeedSequence per inner solve; these assertions are what
+    keep it fixed, so do not weaken them to a tolerance.
+    """
+    cfg = _hartree_cfg(tmp_path, K_max=3)
+    out = Path(cfg.run.out)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        run_realization(cfg, 0, out, _fail_after_stage="rung")
+
+    g = store.realization_group(store.open_run(out), 0)
+    mid = store.read_hartree(g)
+    assert mid is not None and mid["outer"] == 1
+    assert store.rungs_done(g), "the completed rung should have survived the kill"
+
+    assert run_realization(cfg, 0, out) == "finalized"
+    resumed = dict(store.realization_group(store.open_run(out), 0).attrs["report"])
+    assert resumed["certified"]
+
+    clean_cfg = _hartree_cfg(tmp_path / "clean", K_max=3)
+    Path(clean_cfg.run.out).parent.mkdir(parents=True, exist_ok=True)
+    run_realization(clean_cfg, 0, clean_cfg.run.out)
+    clean = dict(
+        store.realization_group(store.open_run(clean_cfg.run.out), 0).attrs["report"]
+    )
+    assert resumed["hartree"]["n_iters"] == clean["hartree"]["n_iters"]
+    # Bitwise, every outer iteration -- not just the one the checkpoint covered.
+    assert resumed["hartree"]["history"] == clean["hartree"]["history"]
+    assert resumed["e_total"] == clean["e_total"]
+    assert resumed["max_disc_weight"] == clean["max_disc_weight"]
+
+
+def test_hartree_reports_non_convergence_rather_than_hiding_it(tmp_path: Path) -> None:
+    """K_max=1 cannot satisfy a tight tol. The artifact must say so."""
+    cfg = _hartree_cfg(tmp_path, K_max=1, tol=1e-30)
+    out = run_ensemble(cfg)
+    hr = dict(store.realization_group(store.open_run(out), 0).attrs["report"])["hartree"]
+    assert hr["converged"] is False and hr["n_iters"] == 1
