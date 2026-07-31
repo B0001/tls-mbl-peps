@@ -141,3 +141,68 @@ committed): Tier-2 Γ₁ with echoed model inputs in REPORT.md (the `gamma_1` fu
 exists in `observables/decoherence.py`; the §12 fluctuator table, the spectral-diffusion
 proxy and the report wiring do not), and the §7.4 Hartree self-consistency loop with its
 lazy r>R_c tail stream (P5's last exit item; `hartree.py` is still bound-only).
+
+## Tier-2 (§12) + Hartree loop (§7.4) — 2026-07-30, same session
+
+```
+uv run pytest tests            -> 211 passed, 2 skipped   (was 179 after the xi/E(D) work)
+uv run mypy                    -> Success: no issues found in 48 source files
+uv run ruff check .            -> All checks passed!
+make verify                    -> ALL PASS (51/51), ALL PASS (9/9)
+make verify-jax                -> consistency D=2 2.032e-15,  D=3 2.218e-14
+                                  T-AD-FD chi=4 1.337e-09,  chi=2 4.763e-09
+```
+
+Jax-tier numbers bit-identical for the third recorded run. **This matters more than
+usual here: `core/rng.py` went from `spawn(3)` to `spawn(4)` to add the Hartree tail
+stream.** `SeedSequence` derives children by index, so appending leaves children 0-2
+untouched — verified directly across four (master_seed, realization) keys in
+`test_existing_three_streams_are_unchanged_by_the_fourth`, and confirmed end-to-end by
+the golden fixtures and both baselines still passing. Stream ORDER is now documented as
+frozen: new streams append, never insert.
+
+**Tier-2 (§12) complete.** All three outputs now exist (only `gamma_1` did): the
+fluctuator table, `gamma_1` refactored onto one shared `splittings` definition, and the
+spectral-diffusion proxy. Wired through orchestrate -> zarr attrs -> REPORT.md, default
+off, and REPORT.md now *states* "not computed" when off instead of omitting the section.
+Two decisions worth knowing:
+- Transverse weights are LABELED `bare_field` vs `measured_state` rather than one being
+  silently substituted; orchestrate passes the certified state's polarization, so
+  production runs report `measured_state`.
+- `inputs_from_config` REFUSES unit-tagged strings ("5.0GHz"). Converting one to units of
+  W needs W in that unit and no layer carries it (W == 1.0 internally, §2). A Tier-2
+  number looks identical whether the conversion was right or invented, which is exactly
+  why guessing is unacceptable. Declare Tier-2 inputs in units of W.
+
+A real bug surfaced while testing the thermal activity factor: clamping the cosh
+*argument* to dodge overflow floors the factor at a spurious ~1e-261 constant instead of
+letting it decay, so T=1e-8 and T=1e-4 returned identical variances. Now u/(1+u)^2 with
+u = exp(-E/T) — exact, stable at both ends, underflows to a true 0.0 for E >> T.
+Regression-locked.
+
+**Hartree (§7.4): loop implemented and tested, NOT yet driven by the orchestrator.**
+`hartree_loop`, `tail_field` and the counter-based lazy tail stream (NR-5) are done, with
+15 tests. The tail couplings are drawn from the same U(-1,1) distribution as
+`sampling.py`'s retained bonds, and are keyed by the PAIR (Philox counter = s_a*N + s_b),
+so the same value comes back regardless of request order, repetition, or outer iteration
+— the property that makes the loop reproducible without an O(N^2) table.
+
+Driving it from `orchestrate.py` means re-entering the D-ladder once per outer iteration
+with per-iteration checkpoint stages, and the resume-after-kill contract has not been
+extended to cover that. Rather than accept `hartree.enabled: true` and silently run the
+h_mf = 0 baseline, `run_realization` now **raises** — a knob that is read, validated and
+ignored is precisely the defect ADR-016 was written about. This is the one remaining
+piece of §16 P5.
+
+**INV-5 semantics under the loop, decided and tested:** the bound does NOT shrink. The
+loop *moves* the neglected error (the tail's mean-field part is treated; its correlations
+are not), and 2*pi*g_J/R_c still bounds what is left. Reporting a smaller bound because
+the loop ran would claim rigor the mean-field treatment does not provide. Only the label
+(`HartreeResult.bound_covers`) changes; any future tightening needs its own ADR and proof.
+
+**Calibration note for whoever touches `test_damping_prevents_the_oscillation`:** the
+tail-field operator is symmetric with zero diagonal, hence traceless, hence its spectrum
+always straddles zero (measured lambda_max = 5.79e-3, lambda_min = -5.12e-3 at L=4,
+R_c=1, g_J=1e-2, seed 3). If the gain pushes the POSITIVE branch above 1, damping cannot
+help for any alpha — a first attempt at gain = -500 diverged even at alpha = 0.05. The
+gain is placed in the window where only the negative (two-cycle) branch is unstable.

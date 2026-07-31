@@ -43,21 +43,35 @@ def realization_seed_sequence(
 
 @dataclass(frozen=True)
 class RealizationStreams:
-    """The three independent RNG streams a single realization consumes."""
+    """The four independent RNG streams a single realization consumes.
+
+    ORDER IS FROZEN. `SeedSequence.spawn` derives children by index, so appending a
+    stream leaves the earlier ones bit-identical, but *reordering* or inserting one would
+    silently change every golden fixture, the frozen baselines in `prototypes/baselines/`
+    and T-DET. New streams go on the end, never in the middle.
+    """
 
     disorder: np.random.Generator  # model/sampling.py: eps, delta, J
     torch_init_seed: int  # optimize/init.py: PEPS random init
     torch_sketch_seed: int  # kernels/rsvd.py: Gaussian test matrices
+    tail_seed: int  # model/hartree.py: lazy r > R_c couplings (§7.4, NR-5)
 
 
 def realization_streams(master_seed: int, realization_index: int) -> RealizationStreams:
-    """Derive the (disorder, torch_init, torch_sketch) streams for one realization."""
+    """Derive the (disorder, torch_init, torch_sketch, tail) streams for one realization.
+
+    `spawn(4)`, not `spawn(3)`: the tail stream was appended when the §7.4 Hartree loop
+    landed. Children 0-2 are unchanged by the extension (verified across seeds in
+    tests/unit/test_hartree_loop.py::test_existing_three_streams_are_unchanged), so no
+    stored artifact moves.
+    """
     base = realization_seed_sequence(master_seed, realization_index)
-    disorder_seq, torch_init_seq, torch_sketch_seq = base.spawn(3)
+    disorder_seq, torch_init_seq, torch_sketch_seq, tail_seq = base.spawn(4)
     return RealizationStreams(
         disorder=np.random.default_rng(disorder_seq),
         torch_init_seed=int(torch_init_seq.generate_state(1, dtype=np.uint64)[0]),
         torch_sketch_seed=int(torch_sketch_seq.generate_state(1, dtype=np.uint64)[0]),
+        tail_seed=int(tail_seq.generate_state(1, dtype=np.uint64)[0]),
     )
 
 

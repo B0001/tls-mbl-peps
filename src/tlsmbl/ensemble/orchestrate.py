@@ -72,6 +72,21 @@ def run_realization(
     if stage == "finalized":
         return "finalized"
 
+    if cfg.model.hartree.enabled:
+        # §7.4's loop and its lazy tail stream exist and are tested
+        # (model/hartree.py::hartree_loop, tests/unit/test_hartree_loop.py), but driving
+        # it from here means re-running the D-ladder once per outer iteration with
+        # per-iteration checkpoint stages, which the resume-after-kill contract has not
+        # been extended to cover. Refuse loudly rather than accept the flag and silently
+        # run the h_mf = 0 baseline: a config knob that is read, validated and ignored is
+        # exactly the defect ADR-016 was written about.
+        raise NotImplementedError(
+            "model.hartree.enabled is not wired into the orchestrator yet: the §7.4 loop "
+            "(model/hartree.py::hartree_loop) is implemented and tested, but running it "
+            "requires re-entering the D-ladder per outer iteration with checkpointing, "
+            "which is not done. Run with hartree.enabled: false (the v1 pure-truncation "
+            "baseline, h_mf = 0); the rigorous INV-5 tail bound is reported either way."
+        )
     streams = realization_streams(cfg.run.master_seed, k)
     spec = TensorSpec()
     backend = _backend(cfg, streams.torch_sketch_seed)
