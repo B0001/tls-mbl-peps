@@ -265,3 +265,20 @@ iteration — asserted directly.
 **Cost:** each outer iteration re-runs the whole ladder from a product init (a new h_mf
 changes H, so the previous optimum solves a different problem). Budget K_max x a normal
 realization. This is why the loop stays off in smoke/pilot/benchmark.
+
+### Follow-up: the step-ahead mean field (2026-07-31)
+
+Checked independently after wiring, because it is the kind of error that produces a
+plausible-looking artifact rather than a failure. §7.4 damps *after* measuring, so
+`HartreeResult.h_mf` is one damped step past the field the final state was solved in —
+measured max difference 4.5e-5 at L=4, orders above any tolerance the report quotes.
+Publishing it next to a certified energy would describe a different Hamiltonian from the
+one that was optimized.
+
+The orchestrator is correct: it persists `last["real"].h_mf`, the pre-damping field
+actually passed to `solve`, and the field handed to `before_iteration` equals what `solve`
+receives on every iteration (so the checkpoint and the certified artifact agree). Both
+facts are now pinned by
+`tests/unit/test_hartree_loop.py::test_returned_field_is_one_damped_step_past_the_solved_one`,
+and `HartreeResult`'s docstring carries the warning, because the trap is live for any
+future caller that reaches for the obvious attribute.

@@ -250,3 +250,50 @@ def test_inv5_bound_does_not_shrink_when_the_loop_runs() -> None:
     e = -0.3
     assert tail_certified(_GJ, _RC, e, 10.0) is tail_certified(_GJ, _RC, e, 10.0)
     assert res.tail_bound > 0.0
+
+
+def test_returned_field_is_one_damped_step_past_the_solved_one() -> None:
+    """Pins the trap documented on HartreeResult: `h_mf` is NOT the field the final state
+    was solved in.
+
+    §7.4 damps after measuring, so the loop's last action is a step past the field it last
+    passed to `solve`. Publishing `HartreeResult.h_mf` next to a certified energy would
+    describe a different Hamiltonian from the one that was optimized. The field handed to
+    `before_iteration` IS the solved field, which is what the orchestrator persists.
+    """
+    seen: list[np.ndarray] = []
+    ckpt: list[tuple[int, np.ndarray]] = []
+
+    def solve(h: np.ndarray) -> np.ndarray:
+        seen.append(h.copy())
+        return 0.3 * h + 0.1
+
+    res = hartree_loop(
+        solve, L=_L, R_c=_RC, g_J=_GJ, tail_seed=11, K_max=4, alpha=0.5, tol=0.0,
+        before_iteration=lambda n, h, hist: ckpt.append((n, h.copy())),
+    )
+    assert res.n_iters == 4 and len(seen) == 4
+
+    # What the hook hands out is exactly what solve receives -- every iteration. This is
+    # the contract the orchestrator's checkpoint depends on.
+    for (_, checkpointed), solved in zip(ckpt, seen):
+        assert np.array_equal(checkpointed, solved)
+
+    # ...and the returned field is strictly ahead of it, by exactly one damped step.
+    assert not np.array_equal(res.h_mf, seen[-1])
+    h_new = tail_field(0.3 * seen[-1] + 0.1, tail_seed=11, L=_L, R_c=_RC, g_J=_GJ)
+    assert np.array_equal(res.h_mf, 0.5 * seen[-1] + 0.5 * h_new)
+    # The gap is large enough to matter: it dwarfs the tolerances a report quotes.
+    assert np.abs(res.h_mf - seen[-1]).max() > 1e-6
+
+
+def test_before_iteration_sees_the_history_so_far() -> None:
+    """The hook's third argument must be the history BEFORE the current iteration, so a
+    checkpoint written from it resumes with a consistent record."""
+    lens: list[int] = []
+    hartree_loop(
+        _linear_solver(0.3),  # type: ignore[arg-type]
+        L=_L, R_c=_RC, g_J=_GJ, tail_seed=11, K_max=4, alpha=0.5, tol=0.0,
+        before_iteration=lambda n, h, hist: lens.append(len(hist)),
+    )
+    assert lens == [0, 1, 2, 3]

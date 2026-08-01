@@ -71,9 +71,21 @@ def tail_certified(g_J: float, R_c: int, e_per_site: float, tau_tail: float) -> 
 @dataclass(frozen=True)
 class HartreeResult:
     """Outcome of the outer loop. `converged=False` is reported, never raised: the caller
-    decides whether an unconverged mean field invalidates the artifact."""
+    decides whether an unconverged mean field invalidates the artifact.
 
-    h_mf: np.ndarray  # (L, L) float64, indexed [y, x]
+    !! `h_mf` IS NOT THE FIELD THE FINAL STATE WAS SOLVED IN. !!
+    §7.4 damps *after* measuring, so the last thing this loop does is take one more
+    damped step past the field it last called `solve` with. `h_mf` is that step-ahead
+    field -- useful as the warm start for a continuation, WRONG to publish alongside a
+    certified energy, because the state was optimized in the pre-damping field
+    (measured difference at L=4: 4.5e-5, far above any tolerance the report quotes).
+    A caller that certifies an artifact must persist the field it passed to `solve` --
+    equivalently, the field handed to `before_iteration` for the final iteration, which
+    is what `ensemble/orchestrate.py` stores. Pinned by
+    tests/unit/test_hartree_loop.py::test_returned_field_is_one_damped_step_past_the_solved_one.
+    """
+
+    h_mf: np.ndarray  # (L, L) float64, indexed [y, x] -- step-ahead; see above
     n_iters: int
     converged: bool
     max_delta: float  # final max|h_mf - h_new|
