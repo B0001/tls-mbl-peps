@@ -282,3 +282,45 @@ facts are now pinned by
 `tests/unit/test_hartree_loop.py::test_returned_field_is_one_damped_step_past_the_solved_one`,
 and `HartreeResult`'s docstring carries the warning, because the trap is live for any
 future caller that reaches for the obvious attribute.
+
+## Inline correctness review (2026-08-01)
+
+The delegated review agent died three times without producing findings (two session
+limits, one connection drop), so the review was done inline. Everything below was
+verified by execution, not by reading.
+
+**The stateful-RNG bug class — the one that already bit us — is otherwise clean.** Audited
+every `SeedSequence` / `Generator` construction in `src/`. The only live-object reuse was
+the ladder one already fixed. Specifically confirmed safe: `sdrg/ab.py` builds a fresh
+`SeedSequence` inline at both call sites (both arms deliberately share init entropy, which
+is what a matched A/B needs); `optimize/ladder.py::run_ladder` spawns once per call and is
+test-only; `orchestrate.py`'s `seqs[i]` feeds `product_init` OR `grow` per rung, never
+both, and is now rebuilt per inner solve.
+
+**Tail-field accounting (§7.4 / NR-5), all measured:**
+- `_tail_pairs` is the exact set-complement of `sampling.py::_qualifying_pairs`: disjoint
+  and union == all pairs, checked at (L,R_c) = (4,1), (5,2), (8,3). No double counting, no
+  gap between the retained window and the tail.
+- Philox counters `s_a*N + s_b` are unique across all 32,640 pairs at L=16 (max 65,279),
+  so no two tail bonds can collide onto one coupling.
+- A single-site probe reproduces per-bond accounting exactly: each bond contributes to
+  both endpoints once, with no self-coupling.
+- Index conventions hold: `[y,x]` arrays flatten to `s = y*L + x`, and every pair distance
+  matches the `s -> (x,y)` geometry.
+
+**Resume is bitwise from EVERY checkpoint stage**, not just mid-ladder: parametrised over
+`sampled`, `sdrg`, `hartree`, `rung` (with Stage A switched on for the `sdrg` case, since
+the fixture otherwise disables it and the kill would silently no-op). A kill at `hartree`
+lands between the field checkpoint and the ladder that belongs to it — precisely the
+window the write-before-ladder ordering exists to make safe — and resumes bit-identically.
+
+**One honesty fix.** `EnvCertificate.fallback_count` sits among per-environment quantities
+(`chi`, `max_disc_weight`, `updown_gap`) but holds the backend's REALIZATION-CUMULATIVE
+total, so it includes every truncation the D-ladder performed, not just those in the
+certified contraction. That is the right scope for the §11 audit — INV-3's disable is
+per-realization and a rate over one environment is too small a sample — but it must not be
+read as "this energy required N fallbacks". Documented at the field, with a pointer to
+`kernels.zipup.CompressStats.fallback_count`, which is a true per-compression delta.
+
+No correctness defects found beyond the two already fixed this session (ADR-016's dead
+knob and the `seed_seq.spawn` reuse).

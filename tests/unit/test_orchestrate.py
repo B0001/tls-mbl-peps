@@ -248,7 +248,7 @@ def test_disorder_roundtrip(tmp_path: Path) -> None:
     assert dataclasses.asdict(back)["rng_fingerprint"] == real.rng_fingerprint
 
 
-def _hartree_cfg(tmp_path: Path, **hartree: object) -> Config:
+def _hartree_cfg(tmp_path: Path, *, sdrg: bool = False, **hartree: object) -> Config:
     h = {"enabled": True, "K_max": 3, "alpha": 0.5, "tol": 1e-12, **hartree}
     return _cfg(
         tmp_path,
@@ -256,7 +256,7 @@ def _hartree_cfg(tmp_path: Path, **hartree: object) -> Config:
             "model.hartree": h,
             # R_c=1 leaves a real r>R_c tail on the 3x3 lattice for the loop to feed on.
             "model.R_c": 1,
-            "sdrg.enabled": False,
+            "sdrg.enabled": sdrg,
         },
     )
 
@@ -351,3 +351,34 @@ def test_hartree_reports_non_convergence_rather_than_hiding_it(tmp_path: Path) -
     out = run_ensemble(cfg)
     hr = dict(store.realization_group(store.open_run(out), 0).attrs["report"])["hartree"]
     assert hr["converged"] is False and hr["n_iters"] == 1
+
+
+@pytest.mark.parametrize("stage", ["sampled", "sdrg", "hartree", "rung"])
+def test_hartree_resume_is_bitwise_from_every_checkpoint_stage(
+    tmp_path: Path, stage: str
+) -> None:
+    """The bitwise resume contract must hold from EVERY stage the pipeline checkpoints,
+    not just the mid-ladder one. "hartree" and "sdrg" are the stages the outer loop
+    added, and they are the ones where a stale or prematurely-cleared rung would show up:
+    a kill at "hartree" lands between the field checkpoint and the ladder that belongs to
+    it, which is exactly the window the write-before-ladder ordering exists to make safe.
+    """
+    # Stage A is off by default in this fixture, so the "sdrg" stage would never fire
+    # and the kill would silently no-op -- turn it on for that case specifically.
+    use_sdrg = stage == "sdrg"
+    cfg = _hartree_cfg(tmp_path, K_max=3, sdrg=use_sdrg)
+    out = Path(cfg.run.out)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        run_realization(cfg, 0, out, _fail_after_stage=stage)
+    assert run_realization(cfg, 0, out) == "finalized"
+    resumed = dict(store.realization_group(store.open_run(out), 0).attrs["report"])
+
+    clean_cfg = _hartree_cfg(tmp_path / f"clean_{stage}", K_max=3, sdrg=use_sdrg)
+    Path(clean_cfg.run.out).parent.mkdir(parents=True, exist_ok=True)
+    run_realization(clean_cfg, 0, clean_cfg.run.out)
+    clean = dict(
+        store.realization_group(store.open_run(clean_cfg.run.out), 0).attrs["report"]
+    )
+    assert resumed["e_total"] == clean["e_total"], f"resume from {stage!r} not bitwise"
+    assert resumed["hartree"]["history"] == clean["hartree"]["history"]
+    assert resumed["certified"] and clean["certified"]
