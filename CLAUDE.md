@@ -21,7 +21,7 @@ uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 # jax (optional, tier-2 prototype parity only):  uv pip install jax
 make verify        # tier-1 baselines: must show "ALL PASS (51/51)", "ALL PASS (9/9)"
 make verify-jax    # if jax present: consistency ~1e-15; T-AD-FD ≤1e-6 at χ=4 AND χ=2
-uv run pytest tests   # production suite: 138 passed, 2 skipped
+uv run pytest tests   # production suite: 228 passed, 2 skipped (~11 min)
 ```
 If `make verify` fails: **stop and fix the environment.** Never touch a tolerance to pass.
 
@@ -61,7 +61,7 @@ golden incl. INV-2 in anger (`phase3_4x4.py`); SDRG decimation rules (`sdrg_3sit
 
 **P0–P5 COMPLETE (2026-07-31).** All §16 exit criteria green; §18's definition of done is
 met: `REPORT.md` carries E(D) extrapolation, q_EA, ξ, n_res(r), Tier-2 Γ₁ with echoed
-inputs, and the full invariant audit. Suite 214 passed / 2 skipped, mypy + ruff clean,
+inputs, and the full invariant audit. Suite 228 passed / 2 skipped, mypy + ruff clean,
 `make verify` 51/51 and 9/9, `make verify-jax` bit-identical across four recorded runs.
 
 **Remaining, all conditional or study work:**
@@ -73,8 +73,11 @@ inputs, and the full invariant audit. Suite 214 passed / 2 skipped, mypy + ruff 
    resonance census now all have machinery; what is missing is *runs*. The L=8 pilot is
    deep-localized (ξ correctly unresolved, n_res ≡ 0) — a g_J sweep is what would show a
    crossover. Note 3 of 4 pilot realizations are tainted by an unconverged D=3 rung.
-4. Record the kernel backend in the manifest so the INV-3 audit can say "exact backend"
-   instead of "not recorded" (see ADR-016's consequences).
+4. ~~Record the kernel backend in the manifest.~~ **DONE (ADR-017, 2026-08-02.)** The
+   audit line now distinguishes three causes of an absent fallback rate. Established while
+   fixing it: `runs/pilot_L8.zarr` was written at `b973d23`, eight commits before ADR-016
+   wired `sketch_stats`, so its "not recorded" line is a genuine pre-audit artifact and
+   *not* a wiring bug — re-running it under the current build is what gets a real rate.
 
 ## Gotchas (paid for in prototyping — do not pay again)
 - Prototypes reuse 3×3 modules for 4×4 via a **module-global `L` monkey-patch**

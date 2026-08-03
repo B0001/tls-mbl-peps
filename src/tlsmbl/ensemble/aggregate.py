@@ -51,6 +51,10 @@ class Aggregate:
     n_sketch_disabled: int | None
     n_sdrg_bypassed: int | None
     worst_sdrg_ledger: float | None
+    # ADR-017. The manifest's recorded truncation backend, or None for artifacts written
+    # before the field existed. This is what disambiguates "no sketch stats because the
+    # backend never sketches" from "no sketch stats because nothing recorded them".
+    kernel_backend: str | None
 
 
 def _boot_ci(values: np.ndarray, rng: np.random.Generator) -> tuple[float, float, float]:
@@ -132,6 +136,11 @@ def aggregate_run(path: str | Path, *, allow_uncertified: bool = False) -> Aggre
         ),
         n_sdrg_bypassed=sum(bool(b) for b in byp) if byp else None,
         worst_sdrg_ledger=max(float(x) for x in led) if led else None,
+        kernel_backend=(
+            store.read_attr_dict(root, "manifest").get("kernel_backend")
+            if "manifest" in root.attrs
+            else None
+        ),
     )
     _write_outputs(root, path, agg)
     return agg
@@ -170,6 +179,29 @@ def _aggregate_tier2(
         out[key] = _boot_ci(np.array([float(r[key]) for r in recs]), rng)
     out["min_abs_detuning"] = float(min(float(r["min_abs_detuning"]) for r in recs))
     return out
+
+
+def _inv3_rate_phrase(rate: float | None, backend: str | None) -> str:
+    """The §11 INV-3 audit line (ADR-017).
+
+    A missing rate has three distinct causes and they are not interchangeable: the
+    backend had no sketch path, the backend had one but nothing recorded statistics,
+    or the artifact predates the audit entirely. Before the manifest recorded the
+    backend, all three collapsed into one evasive sentence; each now gets its own.
+    """
+    if rate is not None:
+        return f"{rate:.1%}"
+    if backend is None:
+        return "not recorded (artifact predates the INV-3 audit)"
+    if backend == "exact":
+        return "n/a (exact backend -- no sketch path to fall back from)"
+    # Backend recorded as sketching, yet no realization reported statistics. That is a
+    # wiring anomaly, not a clean bill of health, so the report says so rather than
+    # implying the gate was never exercised.
+    return (
+        f"not recorded, though the manifest records the '{backend}' backend "
+        "-- no realization reported sketch statistics"
+    )
 
 
 def _tier2_lines(t: dict[str, Any] | None) -> list[str]:
@@ -262,16 +294,8 @@ def _write_outputs(root, path: str | Path, agg: Aggregate) -> None:  # type: ign
         f"- worst discarded weight (INV-1): {agg.max_disc_weight:.3e}",
         f"- worst up/down gap (INV-1): {agg.max_updown_gap:.3e}",
         f"- uncertified excluded: {agg.n_total - agg.n_certified}",
-        # Deliberately does NOT claim "exact backend": the manifest does not record
-        # which backend ran, so absence of sketch stats is ambiguous between an exact
-        # run and an artifact written before the INV-3 audit existed. Saying which one
-        # would be a guess.
         "- worst sketch gate-fallback rate (INV-3): "
-        + (
-            "not recorded (exact backend, or artifact predates the INV-3 audit)"
-            if agg.worst_gate_fallback_rate is None
-            else f"{agg.worst_gate_fallback_rate:.1%}"
-        ),
+        + _inv3_rate_phrase(agg.worst_gate_fallback_rate, agg.kernel_backend),
         "- realizations with sketching auto-disabled (INV-3): "
         + ("n/a" if agg.n_sketch_disabled is None else str(agg.n_sketch_disabled)),
         "- SDRG bypasses (INV-8): "

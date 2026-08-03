@@ -23,6 +23,21 @@ def test_manifest_records_package_versions() -> None:
     assert "pydantic" in manifest.package_versions
 
 
+def test_manifest_records_the_kernel_backend() -> None:
+    """ADR-017: the INV-3 audit cannot interpret absent sketch statistics unless the
+    artifact says whether a sketch path existed at all."""
+    cfg = Config.from_yaml(SMOKE)
+    assert build_manifest(cfg).kernel_backend == cfg.kernels.backend
+
+
+def test_kernel_backend_does_not_perturb_the_config_hash() -> None:
+    """T-DET: `kernel_backend` is derived from the config, so recording it must not
+    change what `config_hash` commits to."""
+    cfg = Config.from_yaml(SMOKE)
+    assert build_manifest(cfg).config_hash == cfg.config_hash()
+    assert build_manifest(cfg).config_hash == build_manifest(cfg).config_hash
+
+
 def test_manifest_refuses_without_seed() -> None:
     """INV-6 refusal test: even if the pydantic-level guarantee is bypassed, the
     io/manifest.py gate independently refuses to build a manifest without a seed."""

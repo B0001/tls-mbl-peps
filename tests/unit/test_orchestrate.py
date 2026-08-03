@@ -184,6 +184,22 @@ def test_sketched_run_records_the_inv3_audit_trail(tmp_path: Path) -> None:
     assert "not recorded" not in text  # a sketched run must report a real rate
 
 
+def test_exact_run_audits_itself_as_exact_rather_than_unrecorded(tmp_path: Path) -> None:
+    """ADR-017: an exact backend has no sketch path, and the audit must say that instead
+    of the old sentence that also covered artifacts predating the INV-3 audit."""
+    cfg = _cfg(tmp_path, **{"kernels.backend": "exact"})
+    out = run_ensemble(cfg)
+    root = store.open_run(out)
+    assert dict(root.attrs["manifest"])["kernel_backend"] == "exact"
+
+    agg = aggregate_run(out)
+    assert agg.kernel_backend == "exact"
+    assert agg.worst_gate_fallback_rate is None  # nothing to fall back from
+    text = Path(str(out), "REPORT.md").read_text()
+    assert "n/a (exact backend" in text
+    assert "predates the INV-3 audit" not in text
+
+
 def test_resume_after_kill_loses_at_most_one_rung(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, **{"peps.ladder": [2, 3], "optimize.max_outer": 4})
     out = Path(cfg.run.out)

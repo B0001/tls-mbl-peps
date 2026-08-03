@@ -1,8 +1,21 @@
 """INV-6 manifest (ARCHITECTURE.md §11).
 
 Records everything needed to reproduce or audit a run: config hash, git SHA + dirty
-flag, package versions, master seed, and invariant thresholds. `tlsmbl verify
-run.zarr` (Phase 5+) re-derives this hash offline against the stored artifact.
+flag, package versions, master seed, invariant thresholds, and the truncation kernel
+backend. `tlsmbl verify run.zarr` (Phase 5+) re-derives this hash offline against the
+stored artifact.
+
+`kernel_backend` (ADR-017) is the backend the run was *configured* with. It is
+redundant with `config_hash` in the cryptographic sense and deliberately so: the hash
+proves which config ran but cannot be read, and the §11 INV-3 audit has to interpret
+the *absence* of sketch statistics, which is only meaningful once the artifact says
+whether a sketch path existed at all. The backend a given realization *ended up*
+running is per-realization state, not run state -- the manifest is written before any
+realization starts, so it cannot honestly carry an outcome; ADR-016's auto-disable is
+recorded per realization in `report.sketch_stats` instead.
+
+The field is not part of `Config.config_hash()`'s input (that hash is over the config
+alone), so adding it leaves T-DET untouched.
 """
 
 from __future__ import annotations
@@ -29,6 +42,10 @@ class Manifest(BaseModel):
     package_versions: dict[str, str]
     master_seed: int
     invariant_thresholds: dict[str, float | bool]
+    # ADR-017. Typed `str`, not the config's Literal: a future backend (the ADR-008
+    # Rust kernel) must be recordable in an artifact without a schema bump, and readers
+    # of old artifacts must tolerate values this build has never heard of.
+    kernel_backend: str
 
 
 def _git_info(repo_root: Path | None = None) -> tuple[str | None, bool]:
@@ -77,4 +94,5 @@ def build_manifest(config: Config, *, repo_root: Path | None = None) -> Manifest
         package_versions=_package_versions(),
         master_seed=master_seed,
         invariant_thresholds=dict(config.invariants.model_dump()),
+        kernel_backend=config.kernels.backend,
     )
