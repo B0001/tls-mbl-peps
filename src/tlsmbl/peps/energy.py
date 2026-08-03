@@ -258,11 +258,24 @@ def energy_differentiable(
 
 @dataclass(frozen=True)
 class EnvCertificate:
+    """Every field describes THIS environment except `fallback_count`/`sketch_stats`
+    -- read their notes before quoting them."""
+
     chi: int
     max_disc_weight: float
     updown_gap: float
     row_consistency: float
+    # NOT a count for this environment alone: it is the backend's REALIZATION-CUMULATIVE
+    # total at the moment the report was minted, so it includes every truncation the
+    # D-ladder performed on the way here, not just the ones in the certified contraction.
+    # That is the useful scope for the §11 audit (INV-3's disable is per realization, and
+    # a rate over a single environment is too small a sample to mean anything), but it
+    # would be wrong to read it as "this energy required N fallbacks". Per-compression
+    # counts do exist -- `kernels.zipup.CompressStats.fallback_count` is a true delta.
     fallback_count: int
+    # INV-3 audit (§11: REPORT.md echoes fallback rates). Same realization-cumulative
+    # scope as above. None for the exact backend, which has no sketch to fall back from.
+    sketch_stats: dict[str, float | int | bool | None] | None = None
 
 
 _FACTORY_TOKEN = object()
@@ -327,6 +340,12 @@ def energy_certified(
             f"INV-1: up/down energy gap {gap:.3e} > eps_env_E {eps_env_E:.1e} at chi={chi}"
         )
     N = state.L**2
+    # INV-3 audit: read the backend's own cumulative counters rather than reporting a
+    # placeholder. Cumulative is the right scope -- the backend instance is built once
+    # per realization from its spawned sketch stream (orchestrate.py::_backend), so
+    # these counts describe exactly the realization being certified.
+    stats_fn = getattr(backend, "stats", None)
+    sketch_stats = stats_fn() if callable(stats_fn) else None
     return EnergyReport(
         e_total=float(E_down),
         e_per_site=float(E_down) / N,
@@ -335,7 +354,8 @@ def energy_certified(
             max_disc_weight=max_disc,
             updown_gap=gap,
             row_consistency=row_c,
-            fallback_count=0,
+            fallback_count=int(getattr(backend, "fallback_count", 0)),
+            sketch_stats=sketch_stats,
         ),
         tail_bound=tail_bound,
         chi_stability=None,

@@ -119,6 +119,34 @@ def rungs_done(g: zarr.Group) -> list[int]:
     return [int(d) for d in cast("list[int]", g.attrs.get("rungs_done", []))]
 
 
+def reset_rungs(g: zarr.Group) -> None:
+    """Drop every stored rung so the D-ladder re-runs from scratch (§7.4 Hartree outer
+    iterations: a new mean field changes H, so the previous iteration's optimized
+    tensors are no longer solutions of the problem being solved).
+
+    Deletes the tensors as well as the `rungs_done` marker: leaving them would let a
+    resume read a rung that belongs to a superseded mean field, which is worse than
+    having no checkpoint at all.
+    """
+    if "peps" in g:
+        del g["peps"]
+    g.attrs["rungs_done"] = []
+
+
+def write_hartree(g: zarr.Group, record: dict[str, Any]) -> None:
+    """Checkpoint the §7.4 outer loop. Written BEFORE the ladder runs for that outer
+    iteration, so the rungs on disk always belong to the iteration recorded here -- that
+    is what keeps the resume contract at "loses at most one rung" rather than degrading
+    it to "loses at most one outer iteration"."""
+    g.attrs["hartree"] = record
+    g.attrs["stage"] = "hartree"
+
+
+def read_hartree(g: zarr.Group) -> dict[str, Any] | None:
+    rec = g.attrs.get("hartree")
+    return None if rec is None else dict(cast("dict[str, Any]", rec))
+
+
 def write_final(
     g: zarr.Group, report: dict[str, Any], observables: dict[str, Any]
 ) -> None:

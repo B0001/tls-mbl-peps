@@ -21,7 +21,7 @@ uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 # jax (optional, tier-2 prototype parity only):  uv pip install jax
 make verify        # tier-1 baselines: must show "ALL PASS (51/51)", "ALL PASS (9/9)"
 make verify-jax    # if jax present: consistency ~1e-15; T-AD-FD ≤1e-6 at χ=4 AND χ=2
-uv run pytest tests   # production suite: 138 passed, 2 skipped
+uv run pytest tests   # production suite: 228 passed, 2 skipped (~11 min)
 ```
 If `make verify` fails: **stop and fix the environment.** Never touch a tolerance to pass.
 
@@ -40,7 +40,7 @@ no-GIL 3.14, but certification runs are not validated there.
 - `prototypes/` is a **reference oracle, not production code**. Never import it from
   `src/`. Production must reproduce its numbers through `tests/golden/`.
 - Anything underspecified: pick the simplest invariant-consistent option, record an ADR
-  in `docs/adr/` (next number: **ADR-016**), continue. Do not stall.
+  in `docs/adr/` (next number: **ADR-017**), continue. Do not stall.
 
 ## Executed ADRs — do not re-litigate (each records a defect found by running code)
 | ADR | Operational consequence for you |
@@ -51,6 +51,7 @@ no-GIL 3.14, but certification runs are not validated there.
 | 012 | Truncation gradient = full economy SVD + slice — exact for the compression graph (outputs recombine bilinearly), including kept↔discarded coupling. The projector formula is the *sketched-backend fallback only*. |
 | 013 | SDRG PT₂ coefficients: use §9's **current** formulas (original prose had two factor-2 errors). `sdrg_3site.py` Tier-I identity is the arbiter for any change. |
 | 015 | Factored compression (`env.factored`, needed for D≥6) = bond-Gram canonicalization, NOT the original uncanonicalized LinearOp sketch (that violates ADR-010). Equivalence gate: `tests/unit/test_factored_compress.py`. |
+| 016 | INV-3's *second* failure action (auto-disable at >20% fallback) was a dead config knob; now enforced **in `SketchedSVD` on the hot path**, driven by `gate_fallback_rate` only (structural `k≤χ` fallbacks excluded), warmup-gated at 32 sketchable calls, monotonic. `fallback_count` no longer hardcoded to 0 in `EnvCertificate`. |
 
 ## Status → task queue
 **DONE, validated in prototypes (math framework-portable):** kernel scaling + INV-3 gate
@@ -58,15 +59,25 @@ no-GIL 3.14, but certification runs are not validated there.
 51/51); differentiable energy, exact truncation gradients, LBFGS→ED (`ad_phase2.py`); L=4
 golden incl. INV-2 in anger (`phase3_4x4.py`); SDRG decimation rules (`sdrg_3site.py`, 9/9).
 
-**TODO, in order (exit criteria = ARCHITECTURE.md §16 rows):**
-1. **P0** `src/tlsmbl/core`: units, rng (INV-6), guards (INV-7), pydantic config (§13), manifest.
-2. **P1** port model + ED oracle from prototypes into `src/tlsmbl/model` + golden fixtures.
-3. **P2** torch port of peps/kernels/autodiff/optimize. Parity contract: pass the SAME gates
-   at the SAME thresholds as the prototypes (table in `docs/HANDOFF.md`); T-AD-FD must
-   include a genuinely truncating χ configuration, not only the lossless one.
-4. **P3** sketched backend + two-sided gate + T-PERF (exponent gap ≥1.6; prototype measured 3.30).
-5. **P4** SDRG circuit/transform/ledger + A/B harness (a negative A/B result is a valid exit).
-6. **P5** ensemble/zarr/resume/aggregate + INV-5. P6/P7 conditional per §16.
+**P0–P5 COMPLETE (2026-07-31).** All §16 exit criteria green; §18's definition of done is
+met: `REPORT.md` carries E(D) extrapolation, q_EA, ξ, n_res(r), Tier-2 Γ₁ with echoed
+inputs, and the full invariant audit. Suite 228 passed / 2 skipped, mypy + ruff clean,
+`make verify` 51/51 and 9/9, `make verify-jax` bit-identical across four recorded runs.
+
+**Remaining, all conditional or study work:**
+1. **P6 (cond.)** Rust zip-up kernel via pyo3 — the only path to D=6 at production L
+   (measured: D=6 is wall-clock-blocked, ~1.7 h/gradient step; ADR-008 scopes the FFI to
+   the whole row loop, not the SVD, because ADR-010's canonicalization not the SVD is the cost).
+2. **P7 (cond.)** L2/L3 sharding — only if the 1/D extrapolation demands D ≥ 10.
+3. **Physics study plan (§12):** the D-ladder extrapolation, R_c and L sweeps, and the
+   resonance census now all have machinery; what is missing is *runs*. The L=8 pilot is
+   deep-localized (ξ correctly unresolved, n_res ≡ 0) — a g_J sweep is what would show a
+   crossover. Note 3 of 4 pilot realizations are tainted by an unconverged D=3 rung.
+4. ~~Record the kernel backend in the manifest.~~ **DONE (ADR-017, 2026-08-02.)** The
+   audit line now distinguishes three causes of an absent fallback rate. Established while
+   fixing it: `runs/pilot_L8.zarr` was written at `b973d23`, eight commits before ADR-016
+   wired `sketch_stats`, so its "not recorded" line is a genuine pre-audit artifact and
+   *not* a wiring bug — re-running it under the current build is what gets a real rate.
 
 ## Gotchas (paid for in prototyping — do not pay again)
 - Prototypes reuse 3×3 modules for 4×4 via a **module-global `L` monkey-patch**

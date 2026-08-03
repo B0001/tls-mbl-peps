@@ -81,3 +81,246 @@ standard build.
 **33 s wall** (§16 budget: < 5 min on 4 cores). Both realizations certified
 (disc <= 1.2e-22, up/down gap <= 8.9e-16); `verify` clean; `aggregate` wrote
 REPORT.md (q_EA = 0.907 at g_J = 1e-3 — deep localized regime).
+
+## §18 definition-of-done gaps closed + ADR-016 (2026-07-30)
+
+Four items §18 requires in REPORT.md were missing; two of the four are now in, plus a
+dead invariant knob was found and wired. Re-verified on the same 3.14.6 / torch 2.13.0
+root:
+
+```
+uv run pytest tests            -> 179 passed, 2 skipped   (was 138 passed, 2 skipped)
+uv run mypy                    -> Success: no issues found in 48 source files
+uv run ruff check .            -> All checks passed!
+make verify                    -> ALL PASS (51/51), ALL PASS (9/9)
+make verify-jax                -> consistency D=2 2.032e-15,  D=3 2.218e-14
+                                  T-AD-FD chi=4 (disc=0)       1.337e-09
+                                  T-AD-FD chi=2 (disc=1.93e-2) 4.763e-09
+```
+
+The jax-tier numbers are again **bit-identical** to both prior runs: nothing in this
+change touches the numerics.
+
+**Landed.** (a) `observables/localization.py` — xi from a log-linear fit of the
+disorder-mean |Czz(r)| with a bootstrap CI over realizations; (b)
+`ensemble/extrapolate.py` — E(D) = E_inf + c/D with the remaining gap
+|E(D_max) - E_inf| as the honest ansatz-truncation statement; both wired into
+`aggregate.py` and REPORT.md. Both are verdict-carrying: they report "unresolved" with a
+machine-readable reason instead of a number they cannot support.
+
+**ADR-016 — a dead invariant.** INV-3's second failure action ("fallback_rate > 20% =>
+disable sketching for the realization and log") was never implemented:
+`kernels.fallback_disable_rate` was validated by pydantic, echoed in all four configs and
+cited in HANDOFF as the reason D=6 "would switch itself off anyway", but nothing read it.
+Two adjacent gaps in the same trail: `EnvCertificate.fallback_count` was hardcoded to `0`
+in `energy_certified`, and `zipup.py` held a `fallbacks += 0` placeholder — so even the
+*first* failure action's counter never reached `EnergyReport`, and §11's "REPORT.md echoes
+fallback rates, bypass counts" was unmeetable. All now enforced on the hot path in
+`SketchedSVD` (gate fallbacks only, warmup-gated, monotonic — see ADR-016 for why each),
+with `tests/unit/test_inv3_auto_disable.py` proving the action fires, latches, and does
+*not* fire on structural `k<=chi` fallbacks.
+
+**Measured on the existing L=8 pilot** (`tlsmbl aggregate runs/pilot_L8.zarr`):
+- `xi: unresolved (at_noise_floor)` — only r=1 of 3 bins sits above the 1e-8 floor
+  (6.66e-07, 6.84e-09, 3.06e-10), and the signed disorder mean alternates sign. This is
+  the correct verdict, not a defect: at L=8, g_J=1e-3 the correlator is at the
+  contraction noise floor, so no length is resolvable. A naive log-linear fit on those
+  three numbers returns a confident-looking xi ~ 0.27, which is why the refusal exists.
+- `E(D)`: secant_2pt over the [2, 3] ladder, E_inf = -18.182377238
+  [-19.889269649, -16.475484827], remaining gap 3.59e-05. Labeled a secant because two
+  rungs fix the line exactly — no fit residual, no per-realization fit uncertainty.
+- **3 of 4 realizations are tainted by an unconverged rung** (D=3 hit `max_outer: 60`).
+  Per CLAUDE.md's "optimizer floor, not ansatz" gotcha this bounds how much the pilot's
+  E_inf is worth; a re-run with a larger iteration budget is the fix, not a bigger D.
+- The audit reports the INV-3 rate as **"not recorded"**, not "exact backend": the pilot
+  ran `backend: sketched`, but its artifacts predate the plumbing, and the manifest does
+  not record which backend ran. Recording the kernel config in the manifest is follow-up.
+
+**Still open from §18** (both attempted this session, neither landed — no partial code
+committed): Tier-2 Γ₁ with echoed model inputs in REPORT.md (the `gamma_1` function
+exists in `observables/decoherence.py`; the §12 fluctuator table, the spectral-diffusion
+proxy and the report wiring do not), and the §7.4 Hartree self-consistency loop with its
+lazy r>R_c tail stream (P5's last exit item; `hartree.py` is still bound-only).
+
+## Tier-2 (§12) + Hartree loop (§7.4) — 2026-07-30, same session
+
+```
+uv run pytest tests            -> 211 passed, 2 skipped   (was 179 after the xi/E(D) work)
+uv run mypy                    -> Success: no issues found in 48 source files
+uv run ruff check .            -> All checks passed!
+make verify                    -> ALL PASS (51/51), ALL PASS (9/9)
+make verify-jax                -> consistency D=2 2.032e-15,  D=3 2.218e-14
+                                  T-AD-FD chi=4 1.337e-09,  chi=2 4.763e-09
+```
+
+Jax-tier numbers bit-identical for the third recorded run. **This matters more than
+usual here: `core/rng.py` went from `spawn(3)` to `spawn(4)` to add the Hartree tail
+stream.** `SeedSequence` derives children by index, so appending leaves children 0-2
+untouched — verified directly across four (master_seed, realization) keys in
+`test_existing_three_streams_are_unchanged_by_the_fourth`, and confirmed end-to-end by
+the golden fixtures and both baselines still passing. Stream ORDER is now documented as
+frozen: new streams append, never insert.
+
+**Tier-2 (§12) complete.** All three outputs now exist (only `gamma_1` did): the
+fluctuator table, `gamma_1` refactored onto one shared `splittings` definition, and the
+spectral-diffusion proxy. Wired through orchestrate -> zarr attrs -> REPORT.md, default
+off, and REPORT.md now *states* "not computed" when off instead of omitting the section.
+Two decisions worth knowing:
+- Transverse weights are LABELED `bare_field` vs `measured_state` rather than one being
+  silently substituted; orchestrate passes the certified state's polarization, so
+  production runs report `measured_state`.
+- `inputs_from_config` REFUSES unit-tagged strings ("5.0GHz"). Converting one to units of
+  W needs W in that unit and no layer carries it (W == 1.0 internally, §2). A Tier-2
+  number looks identical whether the conversion was right or invented, which is exactly
+  why guessing is unacceptable. Declare Tier-2 inputs in units of W.
+
+A real bug surfaced while testing the thermal activity factor: clamping the cosh
+*argument* to dodge overflow floors the factor at a spurious ~1e-261 constant instead of
+letting it decay, so T=1e-8 and T=1e-4 returned identical variances. Now u/(1+u)^2 with
+u = exp(-E/T) — exact, stable at both ends, underflows to a true 0.0 for E >> T.
+Regression-locked.
+
+**Hartree (§7.4): loop implemented and tested, NOT yet driven by the orchestrator.**
+`hartree_loop`, `tail_field` and the counter-based lazy tail stream (NR-5) are done, with
+15 tests. The tail couplings are drawn from the same U(-1,1) distribution as
+`sampling.py`'s retained bonds, and are keyed by the PAIR (Philox counter = s_a*N + s_b),
+so the same value comes back regardless of request order, repetition, or outer iteration
+— the property that makes the loop reproducible without an O(N^2) table.
+
+Driving it from `orchestrate.py` means re-entering the D-ladder once per outer iteration
+with per-iteration checkpoint stages, and the resume-after-kill contract has not been
+extended to cover that. Rather than accept `hartree.enabled: true` and silently run the
+h_mf = 0 baseline, `run_realization` now **raises** — a knob that is read, validated and
+ignored is precisely the defect ADR-016 was written about. This is the one remaining
+piece of §16 P5.
+
+**INV-5 semantics under the loop, decided and tested:** the bound does NOT shrink. The
+loop *moves* the neglected error (the tail's mean-field part is treated; its correlations
+are not), and 2*pi*g_J/R_c still bounds what is left. Reporting a smaller bound because
+the loop ran would claim rigor the mean-field treatment does not provide. Only the label
+(`HartreeResult.bound_covers`) changes; any future tightening needs its own ADR and proof.
+
+**Calibration note for whoever touches `test_damping_prevents_the_oscillation`:** the
+tail-field operator is symmetric with zero diagonal, hence traceless, hence its spectrum
+always straddles zero (measured lambda_max = 5.79e-3, lambda_min = -5.12e-3 at L=4,
+R_c=1, g_J=1e-2, seed 3). If the gain pushes the POSITIVE branch above 1, damping cannot
+help for any alpha — a first attempt at gain = -500 diverged even at alpha = 0.05. The
+gain is placed in the window where only the negative (two-cycle) branch is unstable.
+
+## P5 complete — Hartree loop driven by the orchestrator (2026-07-31)
+
+```
+uv run pytest tests            -> 214 passed, 2 skipped   (session baseline: 138 passed, 2 skipped)
+uv run mypy                    -> Success: no issues found in 48 source files
+uv run ruff check .            -> All checks passed!
+make verify                    -> ALL PASS (51/51), ALL PASS (9/9)
+make verify-jax                -> consistency D=2 2.032e-15,  D=3 2.218e-14
+                                  T-AD-FD chi=4 1.337e-09,  chi=2 4.763e-09
+tlsmbl run configs/hartree_L4.yaml -> 2:37, both realizations certified, loop converged
+```
+
+Jax numbers bit-identical for the fourth recorded run.
+
+**The loop is now driven per realization** (§16 P5's last exit item): SDRG + D-ladder +
+<sigma^z> measurement became the inner problem, re-entered per outer iteration with an
+updated h_mf. `hartree_loop` gained resumption parameters rather than having its
+recurrence reimplemented in the orchestrator, so §7.4 still has exactly one implementation.
+
+Measured on `configs/hartree_L4.yaml` (L=4, g_J=1e-2, R_c=1, alpha=0.5): converged in 7
+and 8 outer iterations, both realizations certified. The field mismatch halves *exactly*
+each iteration (5.277e-3, 2.638e-3, 1.318e-3, ...), i.e. the iteration is dominated by the
+damping factor (1-alpha) because the tail's mean-field response is weak — consistent with
+the measured tail-operator spectral radius of ~5.8e-3.
+
+**A real bug was found by asserting the resume contract, and it is worth internalizing.**
+A resumed Hartree run was not bitwise identical to an uninterrupted one (1.05e-6 relative
+in the final energy), while two uninterrupted runs were. Ruled out first, all measured:
+the zarr rung round-trip is bit-exact; the h_mf JSON-attrs round-trip is bit-exact;
+`optimize_lbfgs` does not touch torch's global RNG and *is* a pure function of its inputs
+(identical back-to-back, after intervening calls, and single-threaded); thread count was
+unchanged. At outer iteration 2 the inputs (h_mf, eps, delta, J) were bit-identical, yet
+the result differed — which localized it to the init.
+
+Cause: `PEPSState.from_product` calls `seed_seq.spawn(L*L)`, and **spawn is stateful**.
+The ladder's SeedSequences had been hoisted out of the per-outer-iteration path, so an
+uninterrupted run drew spawn children L^2..2L^2-1 at outer 2 while a resumed run — which
+skips outer 1's init — drew 0..L^2-1. Different product inits, different optima. This is
+precisely the hazard `core/rng.py`'s own docstring warns about ("reusing a live object
+across calls would silently break bit-reproducibility (T-DET)"), and it was reintroduced
+the moment a call site started running the ladder more than once. Fixed by building a
+fresh root SeedSequence per inner solve; the single-call (non-Hartree) path is unchanged,
+which the golden fixtures and both baselines confirm. The resume test now asserts
+**bitwise** equality and says not to weaken it.
+
+**Artifact self-consistency:** the disorder group is written at sample time with h_mf = 0,
+so finalize now re-persists the converged field. Without it `read_disorder` would hand
+downstream analysis a different Hamiltonian from the one whose energy was certified. The
+rng fingerprint covers eps/delta/J only, so re-writing does not disturb it.
+
+**Resume contract preserved exactly:** the loop checkpoints its field *before* the ladder
+runs and clears the previous iteration's rungs after, so the rungs on disk always belong
+to the recorded outer iteration. A kill still loses at most one rung, not one outer
+iteration — asserted directly.
+
+**Cost:** each outer iteration re-runs the whole ladder from a product init (a new h_mf
+changes H, so the previous optimum solves a different problem). Budget K_max x a normal
+realization. This is why the loop stays off in smoke/pilot/benchmark.
+
+### Follow-up: the step-ahead mean field (2026-07-31)
+
+Checked independently after wiring, because it is the kind of error that produces a
+plausible-looking artifact rather than a failure. §7.4 damps *after* measuring, so
+`HartreeResult.h_mf` is one damped step past the field the final state was solved in —
+measured max difference 4.5e-5 at L=4, orders above any tolerance the report quotes.
+Publishing it next to a certified energy would describe a different Hamiltonian from the
+one that was optimized.
+
+The orchestrator is correct: it persists `last["real"].h_mf`, the pre-damping field
+actually passed to `solve`, and the field handed to `before_iteration` equals what `solve`
+receives on every iteration (so the checkpoint and the certified artifact agree). Both
+facts are now pinned by
+`tests/unit/test_hartree_loop.py::test_returned_field_is_one_damped_step_past_the_solved_one`,
+and `HartreeResult`'s docstring carries the warning, because the trap is live for any
+future caller that reaches for the obvious attribute.
+
+## Inline correctness review (2026-08-01)
+
+The delegated review agent died three times without producing findings (two session
+limits, one connection drop), so the review was done inline. Everything below was
+verified by execution, not by reading.
+
+**The stateful-RNG bug class — the one that already bit us — is otherwise clean.** Audited
+every `SeedSequence` / `Generator` construction in `src/`. The only live-object reuse was
+the ladder one already fixed. Specifically confirmed safe: `sdrg/ab.py` builds a fresh
+`SeedSequence` inline at both call sites (both arms deliberately share init entropy, which
+is what a matched A/B needs); `optimize/ladder.py::run_ladder` spawns once per call and is
+test-only; `orchestrate.py`'s `seqs[i]` feeds `product_init` OR `grow` per rung, never
+both, and is now rebuilt per inner solve.
+
+**Tail-field accounting (§7.4 / NR-5), all measured:**
+- `_tail_pairs` is the exact set-complement of `sampling.py::_qualifying_pairs`: disjoint
+  and union == all pairs, checked at (L,R_c) = (4,1), (5,2), (8,3). No double counting, no
+  gap between the retained window and the tail.
+- Philox counters `s_a*N + s_b` are unique across all 32,640 pairs at L=16 (max 65,279),
+  so no two tail bonds can collide onto one coupling.
+- A single-site probe reproduces per-bond accounting exactly: each bond contributes to
+  both endpoints once, with no self-coupling.
+- Index conventions hold: `[y,x]` arrays flatten to `s = y*L + x`, and every pair distance
+  matches the `s -> (x,y)` geometry.
+
+**Resume is bitwise from EVERY checkpoint stage**, not just mid-ladder: parametrised over
+`sampled`, `sdrg`, `hartree`, `rung` (with Stage A switched on for the `sdrg` case, since
+the fixture otherwise disables it and the kill would silently no-op). A kill at `hartree`
+lands between the field checkpoint and the ladder that belongs to it — precisely the
+window the write-before-ladder ordering exists to make safe — and resumes bit-identically.
+
+**One honesty fix.** `EnvCertificate.fallback_count` sits among per-environment quantities
+(`chi`, `max_disc_weight`, `updown_gap`) but holds the backend's REALIZATION-CUMULATIVE
+total, so it includes every truncation the D-ladder performed, not just those in the
+certified contraction. That is the right scope for the §11 audit — INV-3's disable is
+per-realization and a rate over one environment is too small a sample — but it must not be
+read as "this energy required N fallbacks". Documented at the field, with a pointer to
+`kernels.zipup.CompressStats.fallback_count`, which is a true per-compression delta.
+
+No correctness defects found beyond the two already fixed this session (ADR-016's dead
+knob and the `seed_seq.spawn` reuse).
