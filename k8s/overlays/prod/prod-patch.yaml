@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tlsmbl-run
+spec:
+  # The L=8 pilot is overnight-class on a laptop. 24h is a ceiling that stops a
+  # wedged run from holding the PVC indefinitely, not a target.
+  activeDeadlineSeconds: 86400
+  # The run is checkpointed and resumable (env.checkpoint_rows in the config),
+  # so a retry after an eviction resumes rather than restarting from scratch.
+  backoffLimit: 3
+  template:
+    spec:
+      containers:
+        - name: solver
+          resources:
+            requests:
+              # Stays at 4 because base/run-config.yaml sets run.workers: 4 and
+              # the image pins OMP/BLAS to 1 thread per process -- extra cores
+              # would simply idle. To scale this run up, raise BOTH: workers in
+              # run-config.yaml and cpu here, to the same number.
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              # Equal to requests -> Guaranteed QoS. That matters for a run this
+              # long: Burstable pods are evicted first under node memory
+              # pressure, and complex128 PEPS contractions have spiky peaks.
+              cpu: "4"
+              memory: 16Gi
+      # Long batch work should not be interrupted by routine descheduling.
+      # This PriorityClass must already exist in the cluster; drop the line if
+      # it does not, or the pod stays Pending with a failed admission.
+      priorityClassName: batch-high
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tlsmbl-runs
+spec:
+  resources:
+    requests:
+      storage: 100Gi
