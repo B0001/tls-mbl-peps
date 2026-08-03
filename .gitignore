@@ -9,3 +9,6 @@ runs/
 .hypothesis/
 .benchmarks/
 .DS_Store
+
+# Scratch output from .claude/skills/run-tlsmbl/driver.py
+.driver-out/
