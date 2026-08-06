@@ -1,0 +1,24 @@
+{
+  "head": "refs/heads/main",
+  "remotes": {
+    "origin": {
+      "name": "origin",
+      "url": "git+ssh://git@github.com/B0001/tls-mbl-peps.git",
+      "fetch_specs": [
+        "refs/heads/*:refs/remotes/origin/*"
+      ],
+      "params": {}
+    }
+  },
+  "backups": {
+    "backup_export": {
+      "name": "backup_export",
+      "url": "file:///Users/benjaminhess/Downloads/tls-mbl-peps/.beads/backup",
+      "fetch_specs": [
+        "refs/heads/*:refs/remotes/backup_export/*"
+      ],
+      "params": {}
+    }
+  },
+  "branches": {}
+}
