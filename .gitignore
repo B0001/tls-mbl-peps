@@ -18,3 +18,6 @@ runs/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+.beads/interactions.jsonl
+.claude/settings.json
