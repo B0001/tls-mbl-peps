@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tlsmbl-run
+spec:
+  # A Job's pod template is immutable. Re-running with a changed config means
+  # `kubectl delete job` first, or generating a fresh name per submission.
+  backoffLimit: 2
+  # Reap the Job object a day after it finishes. The .zarr lives on the PVC and
+  # is unaffected -- only the Job record and its pod are cleaned up.
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # Makes the kubelet chown the PVC to gid 10001 so the non-root solver
+        # can create the .zarr on a freshly provisioned volume.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: solver
+          image: tls-mbl-peps:0.0.1
+          imagePullPolicy: IfNotPresent
+          # ENTRYPOINT is `tlsmbl`, so args are the subcommand and its config.
+          args: ["run", "/etc/tlsmbl/run.yaml"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              # Matches run.workers: 4 in run-config.yaml. The image pins
+              # OMP/BLAS to 1 thread per process, so workers is the entire
+              # parallelism budget -- these two numbers must move together.
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "4"
+              memory: 16Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tlsmbl
+              readOnly: true
+            - name: runs
+              # run.out is relative (runs/pilot_L8.zarr), resolved against the
+              # /app workdir.
+              mountPath: /app/runs
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: tlsmbl-run-config
+        - name: runs
+          persistentVolumeClaim:
+            claimName: tlsmbl-runs
+        # readOnlyRootFilesystem still needs a writable /tmp: numpy/zarr and
+        # torch's inductor cache both scratch there.
+        - name: tmp
+          emptyDir: {}

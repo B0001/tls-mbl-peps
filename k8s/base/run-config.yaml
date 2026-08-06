@@ -1,0 +1,29 @@
+# Cluster run config, mounted at /etc/tlsmbl/run.yaml.
+#
+# Deliberately separate from the repo's configs/ rather than a copy of one:
+# kustomize's load restrictor will not read files outside the kustomization
+# directory, and a duplicated pilot_L8.yaml would silently drift from the
+# original. Cluster runs also differ on two axes that matter --
+#
+#   run.workers  must track the pod's CPU limit, not the laptop's core count.
+#                The container pins OMP/BLAS to 1 thread per process, so
+#                workers is the whole parallelism budget.
+#   run.out      must land under /app/runs, which is where the PVC mounts.
+#                A relative path is resolved against the workdir (/app).
+#
+# The repo's own configs/ are still baked into the image at /app/configs, so
+# `args: ["run", "configs/smoke.yaml"]` works without touching this file.
+#
+# This is the L=8 pilot (see configs/pilot_L8.yaml): SDRG off per the D4 A/B
+# result -- in this weak-coupling localized regime Stage A only adds PT2 bias.
+run:      { name: pilot-L8, master_seed: 20260719, n_realizations: 4, workers: 4, out: runs/pilot_L8.zarr }
+model:    { L: 8, delta_min: 1.0e-3, g_J: 1.0e-3, R_c: 3, polaron_kappa: 0.0,
+            hartree: { enabled: false, K_max: 8, alpha: 0.5, tol: 1.0e-4 } }
+sdrg:     { enabled: false, omega_stop: 0.3, f_max: 0.4, keep_first_order: true, tau_sdrg: 0.05 }
+peps:     { ladder: [2, 3], chi_factor: 1, dtype: complex128 }
+env:      { eps_env: 1.0e-8, eps_env_E: 1.0e-6, polish: true, checkpoint_rows: true, retry_max: 3, dchi: auto }
+kernels:  { backend: sketched, oversample: 8, power_iters: 1, eta: 1.0e-6, c_gate: 10.0, probes: 6,
+            fallback_disable_rate: 0.20, eps_F: 1.0e-12 }
+optimize: { su_steps: 0, inner_iters: 20, max_outer: 60, tol_E: 1.0e-8, tol_g_scale: 1.0e-6 }
+invariants: { tau_chi: 1.0e-6, tau_tail: 0.02, allow_uncertified: false }
+observables: { tier2: { enabled: false } }

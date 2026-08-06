@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tlsmbl-prod
+nameSuffix: -prod
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: prod
+    # See the dev overlay: a Job's selector is controller-owned and immutable.
+    includeSelectors: false
+
+patches:
+  - path: prod-patch.yaml
+
+images:
+  - name: tls-mbl-peps
+    newTag: 0.0.1

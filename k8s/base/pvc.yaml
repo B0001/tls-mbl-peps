@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tlsmbl-runs
+spec:
+  accessModes:
+    # ReadWriteOnce is correct here: one Job pod writes the .zarr at a time.
+    # `tlsmbl verify` reads it afterwards, as a separate Job against the same
+    # claim, never concurrently.
+    - ReadWriteOnce
+  resources:
+    requests:
+      # A checkpointed L=8 run with 4 realizations is a few GB; L=16 benchmarks
+      # are substantially larger. Raise this in the overlay, not here.
+      storage: 20Gi

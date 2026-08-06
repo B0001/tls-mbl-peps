@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tlsmbl-dev
+nameSuffix: -dev
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: dev
+    # Never true for a Job: the controller generates an immutable
+    # `batch.kubernetes.io/controller-uid` selector, and injecting extra labels
+    # into it makes the Job fail to create.
+    includeSelectors: false
+
+patches:
+  - path: dev-patch.yaml
+
+images:
+  - name: tls-mbl-peps
+    newTag: dev

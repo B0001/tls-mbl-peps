@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tlsmbl-run
+spec:
+  # Smoke is minutes, not hours. If it has not finished in 30 the run is wedged
+  # and should be killed rather than left holding the PVC.
+  activeDeadlineSeconds: 1800
+  backoffLimit: 1
+  template:
+    spec:
+      containers:
+        - name: solver
+          imagePullPolicy: Always
+          # The image bakes configs/ in, so dev validates against the repo's own
+          # smoke config (L=4, exact backend, 2 realizations) rather than a
+          # second copy of it in the overlay. Path is relative to the /app
+          # workdir. The ConfigMap is still mounted and simply unused here.
+          args: ["run", "configs/smoke.yaml"]
+          resources:
+            requests:
+              # smoke.yaml sets run.workers: 2.
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tlsmbl-runs
+spec:
+  resources:
+    requests:
+      storage: 5Gi
